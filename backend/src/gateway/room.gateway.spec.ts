@@ -33,6 +33,9 @@ describe('RoomGateway', () => {
     getPlaybackState: jest.fn(),
     getMaxRttForRoom: jest.fn(),
     getClient: jest.fn(() => mockRedisClient),
+    addSocketToRoom: jest.fn(),
+    removeSocketFromRoom: jest.fn(),
+    getSocketsInRoom: jest.fn(),
   };
 
   const mockRoomRepository = {
@@ -187,7 +190,7 @@ describe('RoomGateway', () => {
   });
 
   describe('handleRoomJoin', () => {
-    it('should allow member to join room', async () => {
+    it('should allow member to join room and track in Redis', async () => {
       const mockClient = {
         id: 'socket-123',
         data: { userId: 'user-123', username: 'testuser' },
@@ -211,6 +214,7 @@ describe('RoomGateway', () => {
 
       mockRoomRepository.findOne.mockResolvedValue(mockRoom);
       mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.addSocketToRoom.mockResolvedValue(undefined);
 
       const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
 
@@ -220,6 +224,7 @@ describe('RoomGateway', () => {
         relations: ['user'],
       });
       expect(mockClient.join).toHaveBeenCalledWith('room:room-123');
+      expect(mockRedisService.addSocketToRoom).toHaveBeenCalledWith('room-123', 'socket-123');
       expect(result).toEqual({ success: true, roomId: 'room-123' });
     });
 
@@ -251,6 +256,93 @@ describe('RoomGateway', () => {
       const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'INVALID' });
 
       expect(result).toEqual({ error: 'Room not found' });
+    });
+  });
+
+  describe('handleRoomLeave', () => {
+    it('should allow member to leave room and remove from Redis', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        leave: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRedisService.removeSocketFromRoom.mockResolvedValue(undefined);
+
+      const result = await gateway.handleRoomLeave(mockClient, { roomCode: 'ABC123' });
+
+      expect(mockRoomRepository.findOne).toHaveBeenCalledWith({ where: { roomCode: 'ABC123' } });
+      expect(mockClient.leave).toHaveBeenCalledWith('room:room-123');
+      expect(mockRedisService.removeSocketFromRoom).toHaveBeenCalledWith('room-123', 'socket-123');
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should return error for non-existent room', async () => {
+      const mockClient = {
+        data: { userId: 'user-123', username: 'testuser' },
+      } as unknown as Socket;
+
+      mockRoomRepository.findOne.mockResolvedValue(null);
+
+      const result = await gateway.handleRoomLeave(mockClient, { roomCode: 'INVALID' });
+
+      expect(result).toEqual({ error: 'Room not found' });
+      expect(mockRedisService.removeSocketFromRoom).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('handleDisconnect', () => {
+    it('should clean up socket from all rooms on disconnect', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        rooms: new Set(['socket-123', 'room:room-abc', 'room:room-def']),
+      } as unknown as Socket;
+
+      mockRedisService.removeSocketFromRoom.mockResolvedValue(undefined);
+
+      await gateway.handleDisconnect(mockClient);
+
+      // Should clean up both rooms
+      expect(mockRedisService.removeSocketFromRoom).toHaveBeenCalledWith('room-abc', 'socket-123');
+      expect(mockRedisService.removeSocketFromRoom).toHaveBeenCalledWith('room-def', 'socket-123');
+      expect(mockRedisService.removeSocketFromRoom).toHaveBeenCalledTimes(2);
+    });
+
+    it('should handle disconnect when socket is not in any rooms', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        rooms: new Set(['socket-123']), // Only the socket's own room
+      } as unknown as Socket;
+
+      mockRedisService.removeSocketFromRoom.mockResolvedValue(undefined);
+
+      await gateway.handleDisconnect(mockClient);
+
+      // Should not call removeSocketFromRoom since no room:* entries
+      expect(mockRedisService.removeSocketFromRoom).not.toHaveBeenCalled();
+    });
+
+    it('should handle disconnect for unauthenticated client', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: {},
+        rooms: new Set(['socket-123']),
+      } as unknown as Socket;
+
+      await gateway.handleDisconnect(mockClient);
+
+      // Should not call removeSocketFromRoom for unauthenticated client
+      expect(mockRedisService.removeSocketFromRoom).not.toHaveBeenCalled();
     });
   });
 

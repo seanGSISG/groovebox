@@ -110,9 +110,16 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (userId) {
       this.logger.log(`Client disconnected: ${client.id} (User: ${username})`);
 
-      // Clean up any Redis state if needed
-      // For now, we'll keep room state persistent
-      // Future: Add timeout-based cleanup for inactive users
+      // Clean up room-socket memberships in Redis
+      // Socket.io rooms include the socket's own room (client.id) and any joined rooms
+      for (const room of client.rooms) {
+        // Room names are in format "room:{roomId}" - extract roomId
+        if (room.startsWith('room:')) {
+          const roomId = room.substring(5); // Remove "room:" prefix
+          await this.redisService.removeSocketFromRoom(roomId, client.id);
+          this.logger.log(`Removed socket ${client.id} from room ${roomId} on disconnect`);
+        }
+      }
     } else {
       this.logger.log(`Client disconnected: ${client.id} (Unauthenticated)`);
     }
@@ -147,6 +154,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Join the Socket.io room
       await client.join(`room:${room.id}`);
+
+      // Track socket membership in Redis for RTT calculations
+      await this.redisService.addSocketToRoom(room.id, client.id);
 
       this.logger.log(`User ${client.data.username} joined room ${roomCode}`);
 
@@ -183,6 +193,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Leave the Socket.io room
       await client.leave(`room:${room.id}`);
+
+      // Remove socket from Redis room membership
+      await this.redisService.removeSocketFromRoom(room.id, client.id);
 
       this.logger.log(`User ${client.data.username} left room ${roomCode}`);
 
