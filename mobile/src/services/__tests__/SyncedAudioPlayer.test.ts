@@ -126,4 +126,152 @@ describe('SyncedAudioPlayer', () => {
 
     jest.useRealTimers();
   });
+
+  describe('joinMidSong', () => {
+    it('should calculate position from elapsed time and set up drift correction', async () => {
+      jest.useFakeTimers();
+
+      const playback = {
+        playing: true,
+        trackId: 'test-track',
+        startAtServerTime: 1000, // Server time when track started
+        currentPosition: 5000, // 5 seconds (not used in calculation anymore)
+        serverTimestamp: 1000,
+      };
+
+      // Mock Date.now to return 6000 (local time)
+      // startAtServerTime in local = 1000 - 50 = 950
+      // elapsed = 6000 - 950 = 5050ms = 5.05 seconds
+      const originalDateNow = Date.now;
+      Date.now = jest.fn(() => 6000);
+
+      await player.joinMidSong(playback);
+
+      // Should calculate position from elapsed time, not use currentPosition from server
+      expect(TrackPlayer.seekTo).toHaveBeenCalledWith(5.05);
+      expect(TrackPlayer.play).toHaveBeenCalled();
+      expect(TrackPlayer.reset).toHaveBeenCalled();
+      expect(TrackPlayer.add).toHaveBeenCalled();
+
+      Date.now = originalDateNow;
+      jest.useRealTimers();
+    });
+
+    it('should not join if playback is not playing', async () => {
+      const playback = {
+        playing: false,
+        trackId: 'test-track',
+        startAtServerTime: 1000,
+        currentPosition: 5000,
+        serverTimestamp: 1000,
+      };
+
+      await player.joinMidSong(playback);
+
+      expect(TrackPlayer.reset).not.toHaveBeenCalled();
+      expect(TrackPlayer.play).not.toHaveBeenCalled();
+    });
+
+    it('should not join if trackId is missing', async () => {
+      const playback = {
+        playing: true,
+        trackId: null,
+        startAtServerTime: 1000,
+        currentPosition: 5000,
+        serverTimestamp: 1000,
+      };
+
+      await player.joinMidSong(playback);
+
+      expect(TrackPlayer.reset).not.toHaveBeenCalled();
+      expect(TrackPlayer.play).not.toHaveBeenCalled();
+    });
+
+    it('should not join if startAtServerTime is missing', async () => {
+      const playback = {
+        playing: true,
+        trackId: 'test-track',
+        startAtServerTime: null,
+        currentPosition: 5000,
+        serverTimestamp: 1000,
+      };
+
+      await player.joinMidSong(playback);
+
+      expect(TrackPlayer.reset).not.toHaveBeenCalled();
+      expect(TrackPlayer.play).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('handlePlaybackPause', () => {
+    it('should pause player and stop drift correction', async () => {
+      jest.useFakeTimers();
+
+      // Start playback first to set up drift correction
+      const event = {
+        trackId: 'test-track',
+        trackSource: 'local',
+        startAtServerTime: Date.now() + 1000,
+        startPosition: 0,
+        serverTimestamp: Date.now(),
+      };
+
+      await player.handlePlaybackStart(event);
+
+      // Clear previous calls
+      (TrackPlayer.pause as jest.Mock).mockClear();
+
+      // Pause playback
+      await player.handlePlaybackPause();
+
+      expect(TrackPlayer.pause).toHaveBeenCalled();
+
+      // Verify drift correction is stopped by advancing time
+      // and checking that correctDrift is not called
+      (TrackPlayer.getPosition as jest.Mock).mockClear();
+      jest.advanceTimersByTime(10000); // More than DRIFT_CHECK_INTERVAL_MS
+      await Promise.resolve();
+
+      // getPosition should not be called since drift correction is stopped
+      expect(TrackPlayer.getPosition).not.toHaveBeenCalled();
+
+      jest.useRealTimers();
+    });
+  });
+
+  describe('handlePlaybackStop', () => {
+    it('should stop and reset player, stop drift correction, and clear state', async () => {
+      jest.useFakeTimers();
+
+      // Start playback first
+      const event = {
+        trackId: 'test-track',
+        trackSource: 'local',
+        startAtServerTime: Date.now() + 1000,
+        startPosition: 0,
+        serverTimestamp: Date.now(),
+      };
+
+      await player.handlePlaybackStart(event);
+
+      // Clear previous calls
+      (TrackPlayer.stop as jest.Mock).mockClear();
+      (TrackPlayer.reset as jest.Mock).mockClear();
+
+      // Stop playback
+      await player.handlePlaybackStop();
+
+      expect(TrackPlayer.stop).toHaveBeenCalled();
+      expect(TrackPlayer.reset).toHaveBeenCalled();
+
+      // Verify drift correction is stopped
+      (TrackPlayer.getPosition as jest.Mock).mockClear();
+      jest.advanceTimersByTime(10000); // More than DRIFT_CHECK_INTERVAL_MS
+      await Promise.resolve();
+
+      expect(TrackPlayer.getPosition).not.toHaveBeenCalled();
+
+      jest.useRealTimers();
+    });
+  });
 });

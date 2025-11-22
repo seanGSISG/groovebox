@@ -46,6 +46,10 @@ export class SyncedAudioPlayer {
       `[SyncedAudioPlayer] Playback start: track=${trackId}, serverStart=${startAtServerTime}`,
     );
 
+    // Stop any ongoing drift correction and reset player for concurrent playback protection
+    this.stopDriftCorrection();
+    await TrackPlayer.reset();
+
     // Convert server start time to local time
     const localStartTime = this.syncManager.serverTimeToLocal(startAtServerTime);
     const nowLocal = Date.now();
@@ -127,20 +131,26 @@ export class SyncedAudioPlayer {
     // Load track
     await this.loadTrack(trackId, 'local'); // TODO: Get trackSource from state
 
-    // Calculate current position
-    // currentPosition from server is in milliseconds
-    const positionSeconds = currentPosition / 1000;
+    // Calculate current position from elapsed time (like reference implementation)
+    const localStartTime = this.syncManager.serverTimeToLocal(startAtServerTime);
+    const nowLocal = Date.now();
+    const elapsedMs = nowLocal - localStartTime;
+    const elapsedSeconds = elapsedMs / 1000;
 
-    // Store metadata
+    // Assume track started from position 0 (could be extracted from state if available)
+    const startPosition = 0;
+    const currentPositionCalculated = startPosition + elapsedSeconds;
+
+    // Store metadata for drift correction
     this.currentTrackId = trackId;
-    this.startedAtLocalTime = this.syncManager.serverTimeToLocal(startAtServerTime);
-    this.trackStartPosition = 0; // Assume track started from beginning
+    this.startedAtLocalTime = localStartTime;
+    this.trackStartPosition = startPosition;
 
     // Seek and play
-    await TrackPlayer.seekTo(positionSeconds);
+    await TrackPlayer.seekTo(currentPositionCalculated);
     await TrackPlayer.play();
 
-    console.log(`[SyncedAudioPlayer] Playing from position ${positionSeconds.toFixed(2)}s`);
+    console.log(`[SyncedAudioPlayer] Playing from position ${currentPositionCalculated.toFixed(2)}s`);
 
     // Start drift correction
     this.startDriftCorrection();
