@@ -9,10 +9,7 @@ import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 import { SyncPingDto } from './dto/sync-ping.dto';
 import { SyncPongDto } from './dto/sync-pong.dto';
-
-interface SyncReportDto {
-  rtt: number;
-}
+import { SyncReportDto } from './dto/sync-report.dto';
 
 @WebSocketGateway({
   cors: {
@@ -37,12 +34,19 @@ export class SyncGateway {
     // Calculate clock offset (server - client)
     const clockOffset = serverTimestamp - clientTimestamp;
 
-    // Store offset in Redis
+    // Store offset in Redis with TTL of 1 hour (3600 seconds)
     const redis = this.redisService.getClient();
-    await redis.set(
-      `socket:${client.id}:user.clockOffset`,
-      clockOffset.toString(),
-    );
+    try {
+      await redis.setex(
+        `socket:${client.id}:user.clockOffset`,
+        3600,
+        clockOffset.toString(),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to store clock offset for ${client.id}: ${error.message}`,
+      );
+    }
 
     this.logger.debug(
       `Sync ping from ${client.id}: client=${clientTimestamp}, server=${serverTimestamp}, offset=${clockOffset}`,
@@ -62,9 +66,15 @@ export class SyncGateway {
   ): Promise<{ success: boolean }> {
     const { rtt } = data;
 
-    // Store RTT in Redis
+    // Store RTT in Redis with TTL of 1 hour (3600 seconds)
     const redis = this.redisService.getClient();
-    await redis.set(`socket:${client.id}:user.lastRtt`, rtt.toString());
+    try {
+      await redis.setex(`socket:${client.id}:user.lastRtt`, 3600, rtt.toString());
+    } catch (error) {
+      this.logger.error(
+        `Failed to store RTT for ${client.id}: ${error.message}`,
+      );
+    }
 
     this.logger.debug(`Sync report from ${client.id}: rtt=${rtt}ms`);
 
