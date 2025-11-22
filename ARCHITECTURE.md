@@ -1682,9 +1682,10 @@ export const RoomScreen: React.FC = () => {
 - **Audio calibration**: Per-device delay offset (manual or automatic)
 - **Spatial audio**: Account for user positions for phase alignment
 - **Advanced time-stretching**: Smoother drift correction without seeking
-- **Hardware audio sync**: Use Bluetooth/AirPlay groups (iOS limitation)
+- **Bluetooth LE Audio Local Mode**: Hardware-level sync (<20ms) for local gatherings (see BLUETOOTH_ANALYSIS.md)
 - **P2P mode**: Local network WebRTC for reduced latency
 - **Offline mode**: Download tracks in advance for zero buffering
+- **Ultrasonic calibration**: Use inaudible tones for precision local sync
 
 ---
 

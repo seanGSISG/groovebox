@@ -25,12 +25,14 @@ GrooveBox is a mobile application (iOS + Android) that enables users to create s
 ### Core Documents
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Complete technical architecture, tech stack justification, database schema, synchronization algorithms, and code examples
 - **[IMPLEMENTATION_CHECKLIST.md](./IMPLEMENTATION_CHECKLIST.md)** - Phase-by-phase implementation checklist with detailed tasks
+- **[BLUETOOTH_ANALYSIS.md](./BLUETOOTH_ANALYSIS.md)** - Analysis of Bluetooth LE Audio as an alternative/enhancement to WebSocket sync
 
 ### Quick Links
 - [Tech Stack Recommendation](./ARCHITECTURE.md#1-tech-stack-recommendation)
 - [Database Schema](./ARCHITECTURE.md#3-database-schema-design)
 - [Synchronization Logic](./ARCHITECTURE.md#5-synchronization-logic---code-examples)
 - [Implementation Roadmap](./ARCHITECTURE.md#4-step-by-step-implementation-plan)
+- [Bluetooth Technology Consideration](./BLUETOOTH_ANALYSIS.md)
 
 ## How It Works
 
