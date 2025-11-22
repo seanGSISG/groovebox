@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_CONFIG } from '../config/api';
@@ -8,9 +8,10 @@ type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 export const useSocket = (): TypedSocket | null => {
   const [socket, setSocket] = useState<TypedSocket | null>(null);
+  const socketRef = useRef<TypedSocket | null>(null);
 
   useEffect(() => {
-    let newSocket: TypedSocket | null = null;
+    let isMounted = true;
 
     const connectSocket = async () => {
       try {
@@ -23,7 +24,7 @@ export const useSocket = (): TypedSocket | null => {
         }
 
         // Create socket connection with auth
-        newSocket = io(API_CONFIG.WS_URL, {
+        const newSocket = io(API_CONFIG.WS_URL, {
           auth: {
             token,
           },
@@ -32,6 +33,8 @@ export const useSocket = (): TypedSocket | null => {
           reconnectionDelay: 1000,
           reconnectionAttempts: 5,
         }) as TypedSocket;
+
+        socketRef.current = newSocket;
 
         newSocket.on('connect', () => {
           console.log('[Socket] Connected:', newSocket?.id);
@@ -45,7 +48,9 @@ export const useSocket = (): TypedSocket | null => {
           console.error('[Socket] Connection error:', error.message);
         });
 
-        setSocket(newSocket);
+        if (isMounted) {
+          setSocket(newSocket);
+        }
       } catch (error) {
         console.error('[Socket] Setup error:', error);
       }
@@ -54,9 +59,13 @@ export const useSocket = (): TypedSocket | null => {
     connectSocket();
 
     return () => {
-      if (newSocket) {
+      isMounted = false;
+      if (socketRef.current) {
         console.log('[Socket] Disconnecting...');
-        newSocket.disconnect();
+        socketRef.current.off('connect');
+        socketRef.current.off('disconnect');
+        socketRef.current.off('connect_error');
+        socketRef.current.disconnect();
       }
     };
   }, []);
