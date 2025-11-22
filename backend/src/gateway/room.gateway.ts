@@ -179,16 +179,20 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       };
 
       if (playbackJson) {
-        const state = JSON.parse(playbackJson);
-        if (state.playing) {
-          const elapsed = serverTimestamp - state.startedAt;
-          playbackState = {
-            playing: true,
-            trackId: state.trackId,
-            startAtServerTime: state.startAtServerTime,
-            currentPosition: elapsed,
-            serverTimestamp,
-          };
+        try {
+          const state = JSON.parse(playbackJson);
+          if (state.playing && state.startAtServerTime) {
+            const elapsed = Math.max(0, serverTimestamp - state.startAtServerTime);
+            playbackState = {
+              playing: true,
+              trackId: state.trackId,
+              startAtServerTime: state.startAtServerTime,
+              currentPosition: elapsed + (state.initialPosition || 0),
+              serverTimestamp,
+            };
+          }
+        } catch (error) {
+          this.logger.error(`Error parsing playback state for room ${room.id}: ${error.message}`);
         }
       }
 
