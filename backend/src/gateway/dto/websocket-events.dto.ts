@@ -36,6 +36,11 @@ export class PlaybackStartDto {
   @IsNumber()
   @Min(0)
   position?: number;
+
+  // Response fields (not validated)
+  startAtServerTime?: number;
+  syncBufferMs?: number;
+  serverTimestamp?: number;
 }
 
 export class PlaybackPauseDto {

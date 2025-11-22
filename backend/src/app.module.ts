@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { RedisModule } from './redis/redis.module';
 import { GatewayModule } from './gateway/gateway.module';
+import { SyncModule } from './sync/sync.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { GatewayModule } from './gateway/gateway.module';
     AuthModule,
     RoomsModule,
     GatewayModule,
+    SyncModule,
   ],
   controllers: [AppController],
   providers: [AppService],

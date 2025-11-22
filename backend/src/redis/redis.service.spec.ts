@@ -27,6 +27,11 @@ describe('RedisService', () => {
       del: jest.fn(),
       hmset: jest.fn(),
       quit: jest.fn(),
+      keys: jest.fn(),
+      get: jest.fn(),
+      sadd: jest.fn(),
+      srem: jest.fn(),
+      smembers: jest.fn(),
     } as any;
 
     (Redis as jest.MockedClass<typeof Redis>).mockImplementation(() => mockRedisClient);
@@ -210,6 +215,156 @@ describe('RedisService', () => {
         position: null,
         lastUpdate: null,
       });
+    });
+  });
+
+  describe('room-socket membership tracking', () => {
+    describe('addSocketToRoom', () => {
+      it('should add socket to room set in Redis', async () => {
+        mockRedisClient.sadd.mockResolvedValue(1);
+
+        await service.addSocketToRoom('room-123', 'socket-abc');
+
+        expect(mockRedisClient.sadd).toHaveBeenCalledWith(
+          'room:room-123:sockets',
+          'socket-abc',
+        );
+      });
+    });
+
+    describe('removeSocketFromRoom', () => {
+      it('should remove socket from room set in Redis', async () => {
+        mockRedisClient.srem.mockResolvedValue(1);
+
+        await service.removeSocketFromRoom('room-123', 'socket-abc');
+
+        expect(mockRedisClient.srem).toHaveBeenCalledWith(
+          'room:room-123:sockets',
+          'socket-abc',
+        );
+      });
+    });
+
+    describe('getSocketsInRoom', () => {
+      it('should get all sockets in a room', async () => {
+        const mockSockets = ['socket-abc', 'socket-def', 'socket-ghi'];
+        mockRedisClient.smembers.mockResolvedValue(mockSockets);
+
+        const result = await service.getSocketsInRoom('room-123');
+
+        expect(mockRedisClient.smembers).toHaveBeenCalledWith('room:room-123:sockets');
+        expect(result).toEqual(mockSockets);
+      });
+
+      it('should return empty array when room has no sockets', async () => {
+        mockRedisClient.smembers.mockResolvedValue([]);
+
+        const result = await service.getSocketsInRoom('room-123');
+
+        expect(result).toEqual([]);
+      });
+    });
+  });
+
+  describe('getMaxRttForRoom', () => {
+    it('should return default RTT (50ms) when room has no sockets', async () => {
+      mockRedisClient.smembers.mockResolvedValue([]);
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(mockRedisClient.smembers).toHaveBeenCalledWith('room:room-123:sockets');
+      expect(result).toBe(50);
+    });
+
+    it('should return maximum RTT value from sockets in specific room', async () => {
+      const mockSockets = ['socket-abc', 'socket-def', 'socket-ghi'];
+      mockRedisClient.smembers.mockResolvedValue(mockSockets);
+      mockRedisClient.get
+        .mockResolvedValueOnce('45')
+        .mockResolvedValueOnce('120')
+        .mockResolvedValueOnce('80');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(mockRedisClient.smembers).toHaveBeenCalledWith('room:room-123:sockets');
+      expect(mockRedisClient.get).toHaveBeenCalledWith('socket:socket-abc:user.lastRtt');
+      expect(mockRedisClient.get).toHaveBeenCalledWith('socket:socket-def:user.lastRtt');
+      expect(mockRedisClient.get).toHaveBeenCalledWith('socket:socket-ghi:user.lastRtt');
+      expect(result).toBe(120);
+    });
+
+    it('should handle null RTT values by using default (50ms)', async () => {
+      const mockSockets = ['socket-abc', 'socket-def'];
+      mockRedisClient.smembers.mockResolvedValue(mockSockets);
+      mockRedisClient.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce('75');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(75);
+    });
+
+    it('should return default RTT (50ms) when all values are null', async () => {
+      const mockSockets = ['socket-abc', 'socket-def'];
+      mockRedisClient.smembers.mockResolvedValue(mockSockets);
+      mockRedisClient.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(50);
+    });
+
+    it('should return maximum RTT even when some values are below default', async () => {
+      const mockSockets = ['socket-abc', 'socket-def', 'socket-ghi'];
+      mockRedisClient.smembers.mockResolvedValue(mockSockets);
+      mockRedisClient.get
+        .mockResolvedValueOnce('20')
+        .mockResolvedValueOnce('30')
+        .mockResolvedValueOnce('25');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(30);
+    });
+
+    it('should handle single socket RTT', async () => {
+      const mockSockets = ['socket-abc'];
+      mockRedisClient.smembers.mockResolvedValue(mockSockets);
+      mockRedisClient.get.mockResolvedValueOnce('95');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(95);
+    });
+
+    it('should isolate RTT calculations per room (not query all sockets)', async () => {
+      // Room 1 has sockets with high RTT
+      const room1Sockets = ['socket-abc', 'socket-def'];
+      mockRedisClient.smembers.mockResolvedValueOnce(room1Sockets);
+      mockRedisClient.get
+        .mockResolvedValueOnce('200')
+        .mockResolvedValueOnce('250');
+
+      const room1Result = await service.getMaxRttForRoom('room-123');
+      expect(room1Result).toBe(250);
+
+      // Room 2 has sockets with low RTT
+      const room2Sockets = ['socket-xyz', 'socket-uvw'];
+      mockRedisClient.smembers.mockResolvedValueOnce(room2Sockets);
+      mockRedisClient.get
+        .mockResolvedValueOnce('30')
+        .mockResolvedValueOnce('40');
+
+      const room2Result = await service.getMaxRttForRoom('room-456');
+      expect(room2Result).toBe(40);
+
+      // Verify correct room keys were queried
+      expect(mockRedisClient.smembers).toHaveBeenCalledWith('room:room-123:sockets');
+      expect(mockRedisClient.smembers).toHaveBeenCalledWith('room:room-456:sockets');
+      expect(mockRedisClient.smembers).toHaveBeenCalledTimes(2);
     });
   });
 

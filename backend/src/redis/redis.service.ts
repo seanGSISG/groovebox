@@ -30,6 +30,37 @@ export class RedisService implements OnModuleDestroy {
     return this.client;
   }
 
+  // Room-socket membership tracking
+  async addSocketToRoom(roomId: string, socketId: string): Promise<void> {
+    await this.client.sadd(`room:${roomId}:sockets`, socketId);
+  }
+
+  async removeSocketFromRoom(roomId: string, socketId: string): Promise<void> {
+    await this.client.srem(`room:${roomId}:sockets`, socketId);
+  }
+
+  async getSocketsInRoom(roomId: string): Promise<string[]> {
+    return await this.client.smembers(`room:${roomId}:sockets`);
+  }
+
+  // Get maximum RTT for room (for adaptive sync buffer)
+  async getMaxRttForRoom(roomId: string): Promise<number> {
+    // Get all sockets in this specific room
+    const socketIds = await this.getSocketsInRoom(roomId);
+    if (socketIds.length === 0) return 50; // default 50ms
+
+    // Query RTT for each socket in the room
+    const rtts = await Promise.all(
+      socketIds.map(socketId => this.client.get(`socket:${socketId}:user.lastRtt`))
+    );
+
+    const validRtts = rtts
+      .map(r => parseFloat(r || '50'))
+      .filter(r => !isNaN(r));
+
+    return validRtts.length > 0 ? Math.max(...validRtts) : 50;
+  }
+
   async onModuleDestroy() {
     await this.client.quit();
   }

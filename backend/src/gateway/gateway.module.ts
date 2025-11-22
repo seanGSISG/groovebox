@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { RoomGateway } from './room.gateway';
 import { Room, RoomMember, User, Message, RoomDjHistory } from '../entities';
 import { RedisModule } from '../redis/redis.module';
+import { PlaybackSyncService } from './services/playback-sync.service';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { RedisModule } from '../redis/redis.module';
       provide: 'RoomGateway',
       useClass: RoomGateway,
     },
+    PlaybackSyncService,
   ],
   exports: ['RoomGateway'],
 })

@@ -23,6 +23,9 @@ import {
   PlaybackPauseDto,
   PlaybackStopDto,
 } from './dto/websocket-events.dto';
+import { RoomStateDto } from './dto/room-state.dto';
+import { SyncBufferHelper } from './helpers/sync-buffer.helper';
+import { PlaybackSyncService } from './services/playback-sync.service';
 import xss from 'xss';
 
 interface AuthenticatedSocket extends Socket {
@@ -47,6 +50,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
+    private readonly playbackSyncService: PlaybackSyncService,
     @InjectRepository(Room)
     private readonly roomRepository: Repository<Room>,
     @InjectRepository(RoomMember)
@@ -109,9 +113,16 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (userId) {
       this.logger.log(`Client disconnected: ${client.id} (User: ${username})`);
 
-      // Clean up any Redis state if needed
-      // For now, we'll keep room state persistent
-      // Future: Add timeout-based cleanup for inactive users
+      // Clean up room-socket memberships in Redis
+      // Socket.io rooms include the socket's own room (client.id) and any joined rooms
+      for (const room of client.rooms) {
+        // Room names are in format "room:{roomId}" - extract roomId
+        if (room.startsWith('room:')) {
+          const roomId = room.substring(5); // Remove "room:" prefix
+          await this.redisService.removeSocketFromRoom(roomId, client.id);
+          this.logger.log(`Removed socket ${client.id} from room ${roomId} on disconnect`);
+        }
+      }
     } else {
       this.logger.log(`Client disconnected: ${client.id} (Unauthenticated)`);
     }
@@ -147,7 +158,52 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Join the Socket.io room
       await client.join(`room:${room.id}`);
 
+      // Track socket membership in Redis for RTT calculations
+      await this.redisService.addSocketToRoom(room.id, client.id);
+
       this.logger.log(`User ${client.data.username} joined room ${roomCode}`);
+
+      // Send current room state to joining user
+      const playbackJson = await this.redisService.getClient().get(
+        `room:${room.id}:state.playback`
+      );
+      const currentDjId = await this.redisService.getCurrentDj(room.id);
+
+      const serverTimestamp = Date.now();
+      let playbackState = {
+        playing: false,
+        trackId: null,
+        startAtServerTime: null,
+        currentPosition: null,
+        serverTimestamp,
+      };
+
+      if (playbackJson) {
+        try {
+          const state = JSON.parse(playbackJson);
+          if (state.playing && state.startAtServerTime) {
+            const elapsed = Math.max(0, serverTimestamp - state.startAtServerTime);
+            playbackState = {
+              playing: true,
+              trackId: state.trackId,
+              startAtServerTime: state.startAtServerTime,
+              currentPosition: elapsed + (state.initialPosition || 0),
+              serverTimestamp,
+            };
+          }
+        } catch (error) {
+          this.logger.error(`Error parsing playback state for room ${room.id}: ${error.message}`);
+        }
+      }
+
+      const roomState: RoomStateDto = {
+        roomId: room.id,
+        members: [], // TODO: fetch from room members
+        currentDjId,
+        playback: playbackState,
+      };
+
+      client.emit('room:state', roomState);
 
       // Broadcast to other room members
       client.to(`room:${room.id}`).emit('room:user-joined', {
@@ -182,6 +238,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Leave the Socket.io room
       await client.leave(`room:${room.id}`);
+
+      // Remove socket from Redis room membership
+      await this.redisService.removeSocketFromRoom(room.id, client.id);
 
       this.logger.log(`User ${client.data.username} left room ${roomCode}`);
 
@@ -280,22 +339,46 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return { error: 'Only the current DJ can start playback' };
       }
 
-      // Update Redis room state
+      // Calculate adaptive sync buffer based on room RTT
+      const maxRtt = await this.redisService.getMaxRttForRoom(room.id);
+      const syncBufferMs = SyncBufferHelper.calculateSyncBuffer(maxRtt);
+      const serverTimestamp = Date.now();
+      const startAtServerTime = serverTimestamp + syncBufferMs;
+
+      // Build response with sync timing info
+      const response: PlaybackStartDto = {
+        roomCode,
+        trackId,
+        position,
+        startAtServerTime,
+        syncBufferMs,
+        serverTimestamp,
+      };
+
+      // Store enhanced playback state in Redis
+      await this.redisService.getClient().set(
+        `room:${room.id}:state.playback`,
+        JSON.stringify({
+          playing: true,
+          trackId,
+          startAtServerTime,
+          startedAt: serverTimestamp,
+          initialPosition: position,
+        })
+      );
+
+      // Also update legacy playback state for backward compatibility
       await this.redisService.setPlaybackState(room.id, 'playing', trackId, position);
 
       // Broadcast to all room members
-      const payload = {
-        roomId: room.id,
-        trackId,
-        position,
-        timestamp: Date.now(),
-      };
+      this.server.to(`room:${room.id}`).emit('playback:start', response);
 
-      this.server.to(`room:${room.id}`).emit('playback:start', payload);
+      // Start periodic sync broadcasts
+      this.playbackSyncService.startSyncBroadcast(room.id);
 
-      this.logger.log(`Playback started in room ${roomCode} by ${client.data.username}`);
+      this.logger.log(`Playback started in room ${roomCode} by ${client.data.username} (sync buffer: ${syncBufferMs}ms)`);
 
-      return { success: true, ...payload };
+      return { success: true, ...response };
     } catch (error) {
       this.logger.error(`Error starting playback: ${error.message}`);
       return { error: 'Failed to start playback' };
@@ -327,6 +410,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Update Redis room state
       await this.redisService.setPlaybackState(room.id, 'paused', undefined, position);
+
+      // Stop periodic sync broadcasts
+      this.playbackSyncService.stopSyncBroadcast(room.id);
 
       // Broadcast to all room members
       const payload = {
@@ -371,6 +457,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Update Redis room state
       await this.redisService.setPlaybackState(room.id, 'stopped');
+
+      // Stop periodic sync broadcasts
+      this.playbackSyncService.stopSyncBroadcast(room.id);
 
       // Broadcast to all room members
       const payload = {
