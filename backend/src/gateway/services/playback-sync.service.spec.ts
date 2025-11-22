@@ -252,6 +252,37 @@ describe('PlaybackSyncService', () => {
       jest.useRealTimers();
     });
 
+    it('should calculate correct theoretical position with non-zero initial position', async () => {
+      jest.useFakeTimers();
+      const roomId = 'room-123';
+      const startedAt = Date.now();
+      const initialPosition = 30000; // Started at 30 seconds into the track
+      const mockPlaybackState = {
+        playing: true,
+        trackId: 'track-456',
+        startAtServerTime: startedAt + 100,
+        startedAt,
+        initialPosition,
+      };
+
+      redisService.getClient().get.mockResolvedValue(JSON.stringify(mockPlaybackState));
+
+      service.startSyncBroadcast(roomId);
+
+      // Fast-forward 10 seconds
+      await jest.advanceTimersByTimeAsync(10000);
+
+      // Theoretical position should be 40000ms (10000ms elapsed + 30000ms initial position)
+      expect(mockServer.emit).toHaveBeenCalledWith(
+        'playback:sync',
+        expect.objectContaining({
+          theoreticalPosition: 40000,
+        }),
+      );
+
+      jest.useRealTimers();
+    });
+
     it('should not broadcast if no playback state in Redis', async () => {
       jest.useFakeTimers();
       const roomId = 'room-123';

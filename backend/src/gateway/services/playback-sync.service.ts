@@ -52,7 +52,7 @@ export class PlaybackSyncService implements OnModuleDestroy {
 
     const serverTimestamp = Date.now();
     const elapsed = serverTimestamp - state.startedAt;
-    const theoreticalPosition = elapsed;
+    const theoreticalPosition = elapsed + (state.initialPosition || 0);
 
     const syncData: PlaybackSyncDto = {
       roomId,

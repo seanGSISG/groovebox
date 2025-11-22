@@ -320,6 +320,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
           trackId,
           startAtServerTime,
           startedAt: serverTimestamp,
+          initialPosition: position,
         })
       );
 
