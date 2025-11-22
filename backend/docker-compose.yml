@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: groovebox-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: groovebox
+      POSTGRES_USER: groovebox
+      POSTGRES_PASSWORD: groovebox_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U groovebox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: groovebox-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Uncomment this when you have the NestJS app ready
+  # backend:
+  #   build: .
+  #   container_name: groovebox-backend
+  #   restart: unless-stopped
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   environment:
+  #     NODE_ENV: development
+  #     DATABASE_URL: postgresql://groovebox:groovebox_dev_password@postgres:5432/groovebox
+  #     REDIS_URL: redis://redis:6379
+  #     JWT_SECRET: your-secret-key-change-in-production
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - ./src:/app/src
+  #     - ./package.json:/app/package.json
+
+volumes:
+  postgres_data:
+  redis_data:
