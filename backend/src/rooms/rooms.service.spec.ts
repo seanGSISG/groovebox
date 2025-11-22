@@ -13,7 +13,10 @@ import { RoomsService } from './rooms.service';
 import { Room } from '../entities/room.entity';
 import { RoomMember, RoomMemberRole } from '../entities/room-member.entity';
 import { User } from '../entities/user.entity';
+import { Message } from '../entities/message.entity';
+import { RoomDjHistory } from '../entities/room-dj-history.entity';
 import { CreateRoomDto, JoinRoomDto } from './dto';
+import { RedisService } from '../redis/redis.service';
 
 describe('RoomsService', () => {
   let service: RoomsService;
@@ -70,6 +73,26 @@ describe('RoomsService', () => {
     findOne: jest.fn(),
   };
 
+  const mockMessageRepository = {
+    findOne: jest.fn(),
+    find: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+
+  const mockRoomDjHistoryRepository = {
+    findOne: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+
+  const mockRedisService = {
+    getCurrentDj: jest.fn(),
+    setCurrentDj: jest.fn(),
+    setPlaybackState: jest.fn(),
+    getPlaybackState: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -85,6 +108,22 @@ describe('RoomsService', () => {
         {
           provide: getRepositoryToken(User),
           useValue: mockUserRepository,
+        },
+        {
+          provide: getRepositoryToken(Message),
+          useValue: mockMessageRepository,
+        },
+        {
+          provide: getRepositoryToken(RoomDjHistory),
+          useValue: mockRoomDjHistoryRepository,
+        },
+        {
+          provide: RedisService,
+          useValue: mockRedisService,
+        },
+        {
+          provide: 'RoomGateway',
+          useValue: {},
         },
       ],
     }).compile();
