@@ -661,4 +661,245 @@ describe('RoomGateway', () => {
       expect(result.success).toBe(true);
     });
   });
+
+  describe('handleRoomJoin - room:state emission', () => {
+    it('should send room:state with no active playback on join', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.addSocketToRoom.mockResolvedValue(undefined);
+      mockRedisClient.get.mockResolvedValue(null); // No playback state
+      mockRedisService.getCurrentDj.mockResolvedValue(null);
+
+      const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      expect(result).toEqual({ success: true, roomId: 'room-123' });
+      expect(mockClient.emit).toHaveBeenCalledWith('room:state', expect.objectContaining({
+        roomId: 'room-123',
+        members: [],
+        currentDjId: null,
+        playback: expect.objectContaining({
+          playing: false,
+          trackId: null,
+          startAtServerTime: null,
+          currentPosition: null,
+          serverTimestamp: expect.any(Number),
+        }),
+      }));
+    });
+
+    it('should send room:state with active playback and calculated currentPosition', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      const startedAt = Date.now() - 5000; // Started 5 seconds ago
+      const playbackState = {
+        playing: true,
+        trackId: 'track-456',
+        startAtServerTime: startedAt + 100,
+        startedAt: startedAt,
+        initialPosition: 0,
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.addSocketToRoom.mockResolvedValue(undefined);
+      mockRedisClient.get.mockResolvedValue(JSON.stringify(playbackState));
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-456');
+
+      const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      expect(result).toEqual({ success: true, roomId: 'room-123' });
+
+      const emitCall = (mockClient.emit as jest.Mock).mock.calls.find(
+        call => call[0] === 'room:state'
+      );
+      expect(emitCall).toBeDefined();
+
+      const roomState = emitCall[1];
+      expect(roomState.roomId).toBe('room-123');
+      expect(roomState.currentDjId).toBe('dj-456');
+      expect(roomState.playback.playing).toBe(true);
+      expect(roomState.playback.trackId).toBe('track-456');
+      expect(roomState.playback.startAtServerTime).toBe(startedAt + 100);
+
+      // currentPosition should be approximately 5000ms (elapsed time)
+      expect(roomState.playback.currentPosition).toBeGreaterThanOrEqual(4900);
+      expect(roomState.playback.currentPosition).toBeLessThanOrEqual(5100);
+      expect(roomState.playback.serverTimestamp).toBeGreaterThan(startedAt);
+    });
+
+    it('should calculate currentPosition correctly for mid-song join', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      const startedAt = Date.now() - 30000; // Started 30 seconds ago
+      const playbackState = {
+        playing: true,
+        trackId: 'track-789',
+        startAtServerTime: startedAt + 200,
+        startedAt: startedAt,
+        initialPosition: 0,
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.addSocketToRoom.mockResolvedValue(undefined);
+      mockRedisClient.get.mockResolvedValue(JSON.stringify(playbackState));
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-789');
+
+      await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      const emitCall = (mockClient.emit as jest.Mock).mock.calls.find(
+        call => call[0] === 'room:state'
+      );
+      const roomState = emitCall[1];
+
+      // currentPosition should be approximately 30000ms (30 seconds elapsed)
+      expect(roomState.playback.currentPosition).toBeGreaterThanOrEqual(29900);
+      expect(roomState.playback.currentPosition).toBeLessThanOrEqual(30100);
+    });
+
+    it('should send room:state with paused playback (playing: false)', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      const playbackState = {
+        playing: false, // Paused
+        trackId: 'track-456',
+        startAtServerTime: null,
+        startedAt: null,
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.addSocketToRoom.mockResolvedValue(undefined);
+      mockRedisClient.get.mockResolvedValue(JSON.stringify(playbackState));
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-456');
+
+      await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      const emitCall = (mockClient.emit as jest.Mock).mock.calls.find(
+        call => call[0] === 'room:state'
+      );
+      const roomState = emitCall[1];
+
+      expect(roomState.playback.playing).toBe(false);
+      expect(roomState.playback.trackId).toBeNull();
+      expect(roomState.playback.currentPosition).toBeNull();
+      expect(roomState.playback.startAtServerTime).toBeNull();
+    });
+
+    it('should include currentDjId in room:state', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.addSocketToRoom.mockResolvedValue(undefined);
+      mockRedisClient.get.mockResolvedValue(null);
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-999');
+
+      await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      const emitCall = (mockClient.emit as jest.Mock).mock.calls.find(
+        call => call[0] === 'room:state'
+      );
+      const roomState = emitCall[1];
+
+      expect(roomState.currentDjId).toBe('dj-999');
+    });
+  });
 });

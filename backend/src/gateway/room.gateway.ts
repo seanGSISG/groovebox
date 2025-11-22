@@ -23,6 +23,7 @@ import {
   PlaybackPauseDto,
   PlaybackStopDto,
 } from './dto/websocket-events.dto';
+import { RoomStateDto } from './dto/room-state.dto';
 import { SyncBufferHelper } from './helpers/sync-buffer.helper';
 import { PlaybackSyncService } from './services/playback-sync.service';
 import xss from 'xss';
@@ -161,6 +162,44 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       await this.redisService.addSocketToRoom(room.id, client.id);
 
       this.logger.log(`User ${client.data.username} joined room ${roomCode}`);
+
+      // Send current room state to joining user
+      const playbackJson = await this.redisService.getClient().get(
+        `room:${room.id}:state.playback`
+      );
+      const currentDjId = await this.redisService.getCurrentDj(room.id);
+
+      const serverTimestamp = Date.now();
+      let playbackState = {
+        playing: false,
+        trackId: null,
+        startAtServerTime: null,
+        currentPosition: null,
+        serverTimestamp,
+      };
+
+      if (playbackJson) {
+        const state = JSON.parse(playbackJson);
+        if (state.playing) {
+          const elapsed = serverTimestamp - state.startedAt;
+          playbackState = {
+            playing: true,
+            trackId: state.trackId,
+            startAtServerTime: state.startAtServerTime,
+            currentPosition: elapsed,
+            serverTimestamp,
+          };
+        }
+      }
+
+      const roomState: RoomStateDto = {
+        roomId: room.id,
+        members: [], // TODO: fetch from room members
+        currentDjId,
+        playback: playbackState,
+      };
+
+      client.emit('room:state', roomState);
 
       // Broadcast to other room members
       client.to(`room:${room.id}`).emit('room:user-joined', {
