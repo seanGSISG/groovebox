@@ -15,8 +15,12 @@ async function bootstrap() {
   );
 
   // Enable CORS
+  const corsOrigin = process.env.CORS_ORIGIN?.split(',');
+  if (!corsOrigin && process.env.NODE_ENV === 'production') {
+    throw new Error('CORS_ORIGIN must be configured in production');
+  }
   app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(',') || '*',
+    origin: corsOrigin || ['http://localhost:19006', 'http://localhost:19000'],
     credentials: true,
   });
 
