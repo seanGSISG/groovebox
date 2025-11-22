@@ -8,13 +8,22 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, UseGuards } from '@nestjs/common';
+import { Logger, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Room, RoomMember, User, Message, RoomDjHistory, RoomMemberRole, RemovalReason } from '../entities';
 import { RedisService } from '../redis/redis.service';
 import { WsJwtGuard } from './ws-jwt.guard';
+import {
+  RoomJoinDto,
+  RoomLeaveDto,
+  ChatMessageDto,
+  PlaybackStartDto,
+  PlaybackPauseDto,
+  PlaybackStopDto,
+} from './dto/websocket-events.dto';
+import xss from 'xss';
 
 interface AuthenticatedSocket extends Socket {
   data: {
@@ -52,11 +61,10 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   async handleConnection(client: Socket) {
     try {
-      // Extract token from handshake auth or query params
+      // SECURITY: Only accept tokens from auth or authorization header (not query params)
       const token =
         client.handshake.auth?.token ||
-        client.handshake.headers?.authorization?.replace('Bearer ', '') ||
-        client.handshake.query?.token;
+        client.handshake.headers?.authorization?.replace('Bearer ', '');
 
       if (!token) {
         this.logger.warn(`Connection rejected: No token provided`);
@@ -110,10 +118,11 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('room:join')
   async handleRoomJoin(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { roomCode: string },
+    @MessageBody() data: RoomJoinDto,
   ) {
     try {
       const { roomCode } = data;
@@ -155,10 +164,11 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('room:leave')
   async handleRoomLeave(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { roomCode: string },
+    @MessageBody() data: RoomLeaveDto,
   ) {
     try {
       const { roomCode } = data;
@@ -189,18 +199,15 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('chat:message')
   async handleChatMessage(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { roomCode: string; content: string },
+    @MessageBody() data: ChatMessageDto,
   ) {
     try {
       const { roomCode, content } = data;
       const userId = client.data.userId;
-
-      if (!content || content.trim().length === 0) {
-        return { error: 'Message content is required' };
-      }
 
       // Find room
       const room = await this.roomRepository.findOne({ where: { roomCode } });
@@ -218,11 +225,14 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return { error: 'You are not a member of this room' };
       }
 
-      // Store message in database
+      // SECURITY: Sanitize message content to prevent XSS attacks
+      const sanitizedContent = xss(content.trim());
+
+      // Store sanitized message in database
       const message = this.messageRepository.create({
         roomId: room.id,
         userId,
-        content: content.trim(),
+        content: sanitizedContent,
       });
 
       await this.messageRepository.save(message);
@@ -248,10 +258,11 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('playback:start')
   async handlePlaybackStart(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { roomCode: string; trackId: string; position?: number },
+    @MessageBody() data: PlaybackStartDto,
   ) {
     try {
       const { roomCode, trackId, position = 0 } = data;
@@ -292,10 +303,11 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('playback:pause')
   async handlePlaybackPause(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { roomCode: string; position?: number },
+    @MessageBody() data: PlaybackPauseDto,
   ) {
     try {
       const { roomCode, position } = data;
@@ -335,10 +347,11 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('playback:stop')
   async handlePlaybackStop(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { roomCode: string },
+    @MessageBody() data: PlaybackStopDto,
   ) {
     try {
       const { roomCode } = data;

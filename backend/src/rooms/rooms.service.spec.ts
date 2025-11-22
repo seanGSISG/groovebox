@@ -752,4 +752,257 @@ describe('RoomsService', () => {
       expect(result).toHaveLength(0);
     });
   });
+
+  describe('getMessages', () => {
+    it('should return messages for a room member', async () => {
+      const userId = 'user-1';
+      const roomCode = 'ABC123';
+
+      const mockRoom = {
+        id: 'room-1',
+        roomCode,
+      };
+
+      const mockMember = {
+        id: 'member-1',
+        roomId: 'room-1',
+        userId,
+      };
+
+      const mockMessages = [
+        {
+          id: 'msg-2',
+          roomId: 'room-1',
+          userId: 'user-2',
+          content: 'Second message',
+          createdAt: new Date('2025-01-02'),
+          user: {
+            username: 'user2',
+            displayName: 'User Two',
+          },
+        },
+        {
+          id: 'msg-1',
+          roomId: 'room-1',
+          userId,
+          content: 'First message',
+          createdAt: new Date('2025-01-01'),
+          user: {
+            username: 'user1',
+            displayName: 'User One',
+          },
+        },
+      ];
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockMessageRepository.find.mockResolvedValue(mockMessages);
+
+      const result = await service.getMessages(userId, roomCode, 50);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].id).toBe('msg-1');
+      expect(result[0].content).toBe('First message');
+      expect(result[1].id).toBe('msg-2');
+      expect(result[1].content).toBe('Second message');
+      expect(mockMessageRepository.find).toHaveBeenCalledWith({
+        where: { roomId: 'room-1' },
+        relations: ['user'],
+        order: { createdAt: 'DESC' },
+        take: 50,
+      });
+    });
+
+    it('should throw NotFoundException if room does not exist', async () => {
+      const userId = 'user-1';
+      const roomCode = 'INVALID';
+
+      mockRoomRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.getMessages(userId, roomCode)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw ForbiddenException if user is not a member', async () => {
+      const userId = 'user-1';
+      const roomCode = 'ABC123';
+
+      const mockRoom = {
+        id: 'room-1',
+        roomCode,
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.getMessages(userId, roomCode)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+  });
+
+  describe('setDj', () => {
+    it('should successfully set a new DJ', async () => {
+      const userId = 'user-1';
+      const djUserId = 'user-2';
+      const roomCode = 'ABC123';
+
+      const mockRoom = {
+        id: 'room-1',
+        roomCode,
+        ownerId: userId,
+      };
+
+      const mockDjMember = {
+        id: 'member-2',
+        roomId: 'room-1',
+        userId: djUserId,
+        role: RoomMemberRole.LISTENER,
+        user: {
+          username: 'djuser',
+          displayName: 'DJ User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne
+        .mockResolvedValueOnce(mockDjMember)
+        .mockResolvedValueOnce(null);
+      mockRedisService.getCurrentDj.mockResolvedValue(null);
+      mockRedisService.setCurrentDj.mockResolvedValue(undefined);
+      mockRoomMemberRepository.save.mockResolvedValue({
+        ...mockDjMember,
+        role: RoomMemberRole.DJ,
+      });
+      mockRoomDjHistoryRepository.create.mockReturnValue({
+        roomId: 'room-1',
+        userId: djUserId,
+        removedAt: null,
+        removalReason: null,
+      });
+      mockRoomDjHistoryRepository.save.mockResolvedValue({});
+
+      const result = await service.setDj(userId, roomCode, { userId: djUserId });
+
+      expect(result).toEqual({ success: true, djId: djUserId });
+      expect(mockRedisService.setCurrentDj).toHaveBeenCalledWith('room-1', djUserId);
+      expect(mockRoomMemberRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ role: RoomMemberRole.DJ }),
+      );
+    });
+
+    it('should throw NotFoundException if room does not exist', async () => {
+      const userId = 'user-1';
+      const djUserId = 'user-2';
+      const roomCode = 'INVALID';
+
+      mockRoomRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.setDj(userId, roomCode, { userId: djUserId }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ForbiddenException if user is not the owner', async () => {
+      const userId = 'user-1';
+      const djUserId = 'user-2';
+      const roomCode = 'ABC123';
+
+      const mockRoom = {
+        id: 'room-1',
+        roomCode,
+        ownerId: 'user-3',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+
+      await expect(
+        service.setDj(userId, roomCode, { userId: djUserId }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should throw BadRequestException if DJ is not a member', async () => {
+      const userId = 'user-1';
+      const djUserId = 'user-2';
+      const roomCode = 'ABC123';
+
+      const mockRoom = {
+        id: 'room-1',
+        roomCode,
+        ownerId: userId,
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.setDj(userId, roomCode, { userId: djUserId }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should replace existing DJ when setting a new one', async () => {
+      const userId = 'user-1';
+      const oldDjUserId = 'user-2';
+      const newDjUserId = 'user-3';
+      const roomCode = 'ABC123';
+
+      const mockRoom = {
+        id: 'room-1',
+        roomCode,
+        ownerId: userId,
+      };
+
+      const mockOldDjMember = {
+        id: 'member-2',
+        roomId: 'room-1',
+        userId: oldDjUserId,
+        role: RoomMemberRole.DJ,
+      };
+
+      const mockNewDjMember = {
+        id: 'member-3',
+        roomId: 'room-1',
+        userId: newDjUserId,
+        role: RoomMemberRole.LISTENER,
+        user: {
+          username: 'newdj',
+          displayName: 'New DJ',
+        },
+      };
+
+      const mockOldDjHistory = {
+        id: 'history-1',
+        roomId: 'room-1',
+        userId: oldDjUserId,
+        removedAt: null,
+        removalReason: null,
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne
+        .mockResolvedValueOnce(mockNewDjMember)
+        .mockResolvedValueOnce(mockOldDjMember);
+      mockRedisService.getCurrentDj.mockResolvedValue(oldDjUserId);
+      mockRoomDjHistoryRepository.findOne.mockResolvedValue(mockOldDjHistory);
+      mockRoomDjHistoryRepository.save.mockResolvedValue({});
+      mockRoomMemberRepository.save.mockResolvedValue({});
+      mockRedisService.setCurrentDj.mockResolvedValue(undefined);
+      mockRoomDjHistoryRepository.create.mockReturnValue({
+        roomId: 'room-1',
+        userId: newDjUserId,
+        removedAt: null,
+        removalReason: null,
+      });
+
+      const result = await service.setDj(userId, roomCode, { userId: newDjUserId });
+
+      expect(result).toEqual({ success: true, djId: newDjUserId });
+      expect(mockRoomDjHistoryRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          removedAt: expect.any(Date),
+        }),
+      );
+    });
+  });
 });
