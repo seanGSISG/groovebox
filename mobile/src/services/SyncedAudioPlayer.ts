@@ -1,0 +1,272 @@
+import TrackPlayer, { State } from 'react-native-track-player';
+import { ClockSyncManager } from './ClockSyncManager';
+import { PlaybackStartEvent, RoomStatePlayback } from '../types/playback.types';
+
+export class SyncedAudioPlayer {
+  private syncManager: ClockSyncManager;
+  private driftCorrectionInterval: NodeJS.Timeout | null = null;
+
+  // Playback metadata
+  private currentTrackId: string | null = null;
+  private startedAtLocalTime: number = 0;
+  private trackStartPosition: number = 0; // seconds
+
+  // Drift correction thresholds
+  private readonly DRIFT_THRESHOLD_MS = 50; // Ignore drift below this
+  private readonly SEEK_THRESHOLD_MS = 200; // Seek if drift exceeds this
+  private readonly DRIFT_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds
+
+  constructor(syncManager: ClockSyncManager) {
+    this.syncManager = syncManager;
+    this.initializePlayer();
+  }
+
+  private async initializePlayer(): Promise<void> {
+    try {
+      await TrackPlayer.setupPlayer();
+      console.log('[SyncedAudioPlayer] Player initialized');
+    } catch (error) {
+      console.error('[SyncedAudioPlayer] Setup failed:', error);
+    }
+  }
+
+  /**
+   * Handle synchronized playback start from server
+   */
+  public async handlePlaybackStart(event: PlaybackStartEvent): Promise<void> {
+    const {
+      trackId,
+      trackSource,
+      startAtServerTime,
+      startPosition,
+      serverTimestamp,
+    } = event;
+
+    console.log(
+      `[SyncedAudioPlayer] Playback start: track=${trackId}, serverStart=${startAtServerTime}`,
+    );
+
+    // Convert server start time to local time
+    const localStartTime = this.syncManager.serverTimeToLocal(startAtServerTime);
+    const nowLocal = Date.now();
+    const delayMs = localStartTime - nowLocal;
+
+    console.log(
+      `[SyncedAudioPlayer] Scheduling in ${delayMs}ms (localStart=${localStartTime})`,
+    );
+
+    // Load track
+    await this.loadTrack(trackId, trackSource);
+
+    // Store metadata
+    this.currentTrackId = trackId;
+    this.startedAtLocalTime = localStartTime;
+    this.trackStartPosition = startPosition;
+
+    if (delayMs > 0) {
+      // Schedule future playback
+      setTimeout(() => {
+        this.startPlayback(startPosition);
+      }, delayMs);
+    } else {
+      // Start time is in the past (network delay exceeded buffer)
+      // Calculate catch-up position
+      const elapsedSeconds = Math.abs(delayMs) / 1000;
+      const adjustedPosition = startPosition + elapsedSeconds;
+
+      console.warn(
+        `[SyncedAudioPlayer] Start time in past by ${Math.abs(delayMs)}ms, seeking to ${adjustedPosition}s`,
+      );
+
+      await this.startPlayback(adjustedPosition);
+    }
+
+    // Start drift correction loop
+    this.startDriftCorrection();
+  }
+
+  /**
+   * Handle pause event
+   */
+  public async handlePlaybackPause(): Promise<void> {
+    await TrackPlayer.pause();
+    this.stopDriftCorrection();
+    console.log('[SyncedAudioPlayer] Paused');
+  }
+
+  /**
+   * Handle stop event
+   */
+  public async handlePlaybackStop(): Promise<void> {
+    await TrackPlayer.stop();
+    await TrackPlayer.reset();
+    this.stopDriftCorrection();
+    this.currentTrackId = null;
+    console.log('[SyncedAudioPlayer] Stopped');
+  }
+
+  /**
+   * Join mid-song: seek to current position
+   */
+  public async joinMidSong(playback: RoomStatePlayback): Promise<void> {
+    if (!playback.playing || !playback.trackId || !playback.startAtServerTime) {
+      return;
+    }
+
+    const {
+      trackId,
+      startAtServerTime,
+      currentPosition,
+      serverTimestamp,
+    } = playback as Required<RoomStatePlayback>;
+
+    console.log(
+      `[SyncedAudioPlayer] Joining mid-song: track=${trackId}, position=${currentPosition}ms`,
+    );
+
+    // Load track
+    await this.loadTrack(trackId, 'local'); // TODO: Get trackSource from state
+
+    // Calculate current position
+    // currentPosition from server is in milliseconds
+    const positionSeconds = currentPosition / 1000;
+
+    // Store metadata
+    this.currentTrackId = trackId;
+    this.startedAtLocalTime = this.syncManager.serverTimeToLocal(startAtServerTime);
+    this.trackStartPosition = 0; // Assume track started from beginning
+
+    // Seek and play
+    await TrackPlayer.seekTo(positionSeconds);
+    await TrackPlayer.play();
+
+    console.log(`[SyncedAudioPlayer] Playing from position ${positionSeconds.toFixed(2)}s`);
+
+    // Start drift correction
+    this.startDriftCorrection();
+  }
+
+  /**
+   * Periodically check and correct drift
+   */
+  private startDriftCorrection(): void {
+    this.stopDriftCorrection();
+
+    this.driftCorrectionInterval = setInterval(async () => {
+      await this.correctDrift();
+    }, this.DRIFT_CHECK_INTERVAL_MS);
+  }
+
+  private stopDriftCorrection(): void {
+    if (this.driftCorrectionInterval) {
+      clearInterval(this.driftCorrectionInterval);
+      this.driftCorrectionInterval = null;
+    }
+  }
+
+  /**
+   * Check current position vs. expected position and correct if needed
+   */
+  private async correctDrift(): Promise<void> {
+    try {
+      const state = await TrackPlayer.getState();
+
+      if (state !== State.Playing) {
+        return; // Only correct during playback
+      }
+
+      // Calculate expected position
+      const nowLocal = Date.now();
+      const elapsedMs = nowLocal - this.startedAtLocalTime;
+      const elapsedSeconds = elapsedMs / 1000;
+      const expectedPosition = this.trackStartPosition + elapsedSeconds;
+
+      // Get actual position
+      const actualPosition = await TrackPlayer.getPosition();
+
+      // Calculate drift
+      const driftSeconds = actualPosition - expectedPosition;
+      const driftMs = driftSeconds * 1000;
+
+      console.log(
+        `[SyncedAudioPlayer] Drift: expected=${expectedPosition.toFixed(3)}s, actual=${actualPosition.toFixed(3)}s, drift=${driftMs.toFixed(2)}ms`,
+      );
+
+      // Only correct if drift exceeds threshold
+      if (Math.abs(driftMs) < this.DRIFT_THRESHOLD_MS) {
+        return; // Drift is acceptable
+      }
+
+      if (Math.abs(driftMs) > this.SEEK_THRESHOLD_MS) {
+        // Large drift: seek to correct position
+        console.log(
+          `[SyncedAudioPlayer] Large drift, seeking to ${expectedPosition.toFixed(3)}s`,
+        );
+        await TrackPlayer.seekTo(expectedPosition);
+      } else {
+        // Small drift: could apply time-stretching here (future enhancement)
+        // For now, just seek
+        console.log(
+          `[SyncedAudioPlayer] Small drift, seeking to ${expectedPosition.toFixed(3)}s`,
+        );
+        await TrackPlayer.seekTo(expectedPosition);
+      }
+    } catch (error) {
+      console.error('[SyncedAudioPlayer] Drift correction error:', error);
+    }
+  }
+
+  /**
+   * Load track based on source
+   */
+  private async loadTrack(trackId: string, trackSource: string): Promise<void> {
+    await TrackPlayer.reset();
+
+    // Different loading logic based on source
+    switch (trackSource) {
+      case 'spotify':
+        console.warn('[SyncedAudioPlayer] Spotify not implemented yet');
+        break;
+
+      case 'youtube':
+        console.warn('[SyncedAudioPlayer] YouTube not implemented yet');
+        break;
+
+      case 'local':
+        // For Phase 2, use a placeholder local file
+        // In production, trackId would be a file URI or URL
+        await TrackPlayer.add({
+          id: trackId,
+          url: trackId,
+          title: 'Test Track',
+          artist: 'GrooveBox',
+        });
+        break;
+
+      default:
+        throw new Error(`Unknown track source: ${trackSource}`);
+    }
+  }
+
+  /**
+   * Start playback at specific position
+   */
+  private async startPlayback(position: number): Promise<void> {
+    try {
+      if (position > 0) {
+        await TrackPlayer.seekTo(position);
+      }
+      await TrackPlayer.play();
+      console.log(`[SyncedAudioPlayer] Playing from ${position.toFixed(3)}s`);
+    } catch (error) {
+      console.error('[SyncedAudioPlayer] Playback start error:', error);
+    }
+  }
+
+  /**
+   * Clean up when destroying
+   */
+  public destroy(): void {
+    this.stopDriftCorrection();
+  }
+}
