@@ -63,43 +63,62 @@ export class RoomsService {
   async createRoom(userId: string, createRoomDto: CreateRoomDto): Promise<RoomDetailsDto> {
     const { roomName, password, settings } = createRoomDto;
 
-    // Generate unique room code
-    const roomCode = await this.generateUniqueRoomCode();
-
     // Hash password if provided
     let passwordHash: string | null = null;
     if (password) {
       passwordHash = await bcrypt.hash(password, this.SALT_ROUNDS);
     }
 
-    // Create room with default settings merged with provided settings
-    const room = this.roomRepository.create({
-      roomCode,
-      roomName,
-      passwordHash,
-      ownerId: userId,
-      settings: {
-        maxMembers: settings?.maxMembers ?? 50,
-        mutinyThreshold: settings?.mutinyThreshold ?? 0.51,
-        djCooldownMinutes: settings?.djCooldownMinutes ?? 5,
-        autoRandomizeDJ: settings?.autoRandomizeDJ ?? false,
-      },
-      isActive: true,
-    });
+    // Retry logic to handle race conditions in room code generation
+    for (let attempt = 0; attempt < this.MAX_RETRIES; attempt++) {
+      try {
+        // Generate unique room code
+        const roomCode = await this.generateUniqueRoomCode();
 
-    await this.roomRepository.save(room);
+        // Create room with default settings merged with provided settings
+        const room = this.roomRepository.create({
+          roomCode,
+          roomName,
+          passwordHash,
+          ownerId: userId,
+          settings: {
+            maxMembers: settings?.maxMembers ?? 50,
+            mutinyThreshold: settings?.mutinyThreshold ?? 0.51,
+            djCooldownMinutes: settings?.djCooldownMinutes ?? 5,
+            autoRandomizeDJ: settings?.autoRandomizeDJ ?? false,
+          },
+          isActive: true,
+        });
 
-    // Create initial RoomMember with owner role
-    const roomMember = this.roomMemberRepository.create({
-      roomId: room.id,
-      userId,
-      role: RoomMemberRole.OWNER,
-    });
+        await this.roomRepository.save(room);
 
-    await this.roomMemberRepository.save(roomMember);
+        // Create initial RoomMember with owner role
+        const roomMember = this.roomMemberRepository.create({
+          roomId: room.id,
+          userId,
+          role: RoomMemberRole.OWNER,
+        });
 
-    // Return room details
-    return this.mapRoomToDetailsDto(room, false);
+        await this.roomMemberRepository.save(roomMember);
+
+        // Return room details
+        return this.mapRoomToDetailsDto(room, false);
+      } catch (error) {
+        // If it's a unique constraint violation, retry with a new code
+        if (error.code === '23505' || error.code === 'ER_DUP_ENTRY') {
+          if (attempt === this.MAX_RETRIES - 1) {
+            throw new ConflictException('Unable to generate unique room code. Please try again.');
+          }
+          // Continue to next iteration
+          continue;
+        }
+        // If it's a different error, rethrow
+        throw error;
+      }
+    }
+
+    // This should never be reached due to the throw in the loop
+    throw new ConflictException('Unable to generate unique room code. Please try again.');
   }
 
   /**
@@ -200,33 +219,50 @@ export class RoomsService {
       throw new NotFoundException('You are not a member of this room');
     }
 
-    // Remove user from room members
-    await this.roomMemberRepository.remove(roomMember);
+    // Use transaction to ensure atomicity when leaving room
+    const queryRunner = this.roomRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    // If user is owner, handle ownership transfer or room deactivation
-    if (roomMember.role === RoomMemberRole.OWNER) {
-      // Find remaining members
-      const remainingMembers = await this.roomMemberRepository.find({
-        where: { roomId: room.id },
-        order: { joinedAt: 'ASC' },
-      });
+    try {
+      // Remove user from room members
+      await queryRunner.manager.remove(roomMember);
 
-      if (remainingMembers.length > 0) {
-        // Transfer ownership to the oldest member
-        const newOwner = remainingMembers[0];
-        newOwner.role = RoomMemberRole.OWNER;
-        await this.roomMemberRepository.save(newOwner);
-        room.ownerId = newOwner.userId;
-        await this.roomRepository.save(room);
-      } else {
-        // No members left, deactivate room
-        room.isActive = false;
-        room.ownerId = null;
-        await this.roomRepository.save(room);
+      // If user is owner, handle ownership transfer or room deactivation
+      if (roomMember.role === RoomMemberRole.OWNER) {
+        // Find remaining members
+        const remainingMembers = await queryRunner.manager.find(RoomMember, {
+          where: { roomId: room.id },
+          order: { joinedAt: 'ASC' },
+        });
+
+        if (remainingMembers.length > 0) {
+          // Transfer ownership to the oldest member
+          const newOwner = remainingMembers[0];
+          newOwner.role = RoomMemberRole.OWNER;
+          await queryRunner.manager.save(newOwner);
+          room.ownerId = newOwner.userId;
+          await queryRunner.manager.save(room);
+        } else {
+          // No members left, deactivate room
+          room.isActive = false;
+          room.ownerId = null;
+          await queryRunner.manager.save(room);
+        }
       }
-    }
 
-    return { message: 'Successfully left the room' };
+      // Commit transaction
+      await queryRunner.commitTransaction();
+
+      return { message: 'Successfully left the room' };
+    } catch (error) {
+      // Rollback transaction on error
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      // Release query runner
+      await queryRunner.release();
+    }
   }
 
   /**
@@ -281,35 +317,36 @@ export class RoomsService {
    * Get all rooms where user is a member
    */
   async getMyRooms(userId: string): Promise<UserRoomDto[]> {
-    // Find all room memberships for the user
-    const memberships = await this.roomMemberRepository.find({
-      where: { userId },
-      relations: ['room'],
-      order: { joinedAt: 'DESC' },
+    // Use query builder to fetch rooms with member counts in a single query
+    const membershipsWithCounts = await this.roomMemberRepository
+      .createQueryBuilder('rm')
+      .leftJoinAndSelect('rm.room', 'room')
+      .leftJoin('room.members', 'members')
+      .addSelect('COUNT(members.id)', 'memberCount')
+      .where('rm.userId = :userId', { userId })
+      .groupBy('rm.id')
+      .addGroupBy('room.id')
+      .orderBy('rm.joinedAt', 'DESC')
+      .getRawAndEntities();
+
+    // Map to UserRoomDto
+    const rooms: UserRoomDto[] = membershipsWithCounts.entities.map((membership, index) => {
+      const memberCount = parseInt(membershipsWithCounts.raw[index].memberCount, 10);
+
+      return {
+        id: membership.room.id,
+        roomCode: membership.room.roomCode,
+        roomName: membership.room.roomName,
+        isPasswordProtected: !!membership.room.passwordHash,
+        ownerId: membership.room.ownerId,
+        settings: membership.room.settings,
+        createdAt: membership.room.createdAt,
+        isActive: membership.room.isActive,
+        memberCount,
+        myRole: membership.role,
+        joinedAt: membership.joinedAt,
+      };
     });
-
-    // Map to UserRoomDto with member counts
-    const rooms: UserRoomDto[] = await Promise.all(
-      memberships.map(async (membership) => {
-        const memberCount = await this.roomMemberRepository.count({
-          where: { roomId: membership.room.id },
-        });
-
-        return {
-          id: membership.room.id,
-          roomCode: membership.room.roomCode,
-          roomName: membership.room.roomName,
-          isPasswordProtected: !!membership.room.passwordHash,
-          ownerId: membership.room.ownerId,
-          settings: membership.room.settings,
-          createdAt: membership.room.createdAt,
-          isActive: membership.room.isActive,
-          memberCount,
-          myRole: membership.role,
-          joinedAt: membership.joinedAt,
-        };
-      })
-    );
 
     return rooms;
   }

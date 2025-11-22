@@ -21,10 +21,39 @@ describe('RoomsService', () => {
   let roomMemberRepository: Repository<RoomMember>;
   let userRepository: Repository<User>;
 
+  const mockQueryRunner = {
+    connect: jest.fn(),
+    startTransaction: jest.fn(),
+    commitTransaction: jest.fn(),
+    rollbackTransaction: jest.fn(),
+    release: jest.fn(),
+    manager: {
+      remove: jest.fn(),
+      find: jest.fn(),
+      save: jest.fn(),
+    },
+  };
+
   const mockRoomRepository = {
     findOne: jest.fn(),
     create: jest.fn(),
     save: jest.fn(),
+    manager: {
+      connection: {
+        createQueryRunner: jest.fn(() => mockQueryRunner),
+      },
+    },
+  };
+
+  const mockQueryBuilder = {
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
+    leftJoin: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    groupBy: jest.fn().mockReturnThis(),
+    addGroupBy: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    getRawAndEntities: jest.fn(),
   };
 
   const mockRoomMemberRepository = {
@@ -34,6 +63,7 @@ describe('RoomsService', () => {
     create: jest.fn(),
     save: jest.fn(),
     remove: jest.fn(),
+    createQueryBuilder: jest.fn(() => mockQueryBuilder),
   };
 
   const mockUserRepository = {
@@ -389,14 +419,16 @@ describe('RoomsService', () => {
 
       mockRoomRepository.findOne.mockResolvedValue(mockRoom);
       mockRoomMemberRepository.findOne.mockResolvedValue(mockRoomMember);
-      mockRoomMemberRepository.remove.mockResolvedValue(mockRoomMember);
+      mockQueryRunner.manager.remove.mockResolvedValue(mockRoomMember);
 
       const result = await service.leaveRoom(userId, roomCode);
 
       expect(result.message).toBe('Successfully left the room');
-      expect(mockRoomMemberRepository.remove).toHaveBeenCalledWith(
+      expect(mockQueryRunner.manager.remove).toHaveBeenCalledWith(
         mockRoomMember,
       );
+      expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.release).toHaveBeenCalled();
     });
 
     it('should transfer ownership when owner leaves', async () => {
@@ -425,13 +457,12 @@ describe('RoomsService', () => {
 
       mockRoomRepository.findOne.mockResolvedValue(mockRoom);
       mockRoomMemberRepository.findOne.mockResolvedValue(ownerMember);
-      mockRoomMemberRepository.remove.mockResolvedValue(ownerMember);
-      mockRoomMemberRepository.find.mockResolvedValue([nextMember]);
-      mockRoomMemberRepository.save.mockResolvedValue({
+      mockQueryRunner.manager.remove.mockResolvedValue(ownerMember);
+      mockQueryRunner.manager.find.mockResolvedValue([nextMember]);
+      mockQueryRunner.manager.save.mockResolvedValueOnce({
         ...nextMember,
         role: RoomMemberRole.OWNER,
-      });
-      mockRoomRepository.save.mockResolvedValue({
+      }).mockResolvedValueOnce({
         ...mockRoom,
         ownerId: 'user-2',
       });
@@ -439,8 +470,9 @@ describe('RoomsService', () => {
       const result = await service.leaveRoom(userId, roomCode);
 
       expect(result.message).toBe('Successfully left the room');
-      expect(mockRoomMemberRepository.save).toHaveBeenCalled();
-      expect(mockRoomRepository.save).toHaveBeenCalled();
+      expect(mockQueryRunner.manager.save).toHaveBeenCalled();
+      expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.release).toHaveBeenCalled();
     });
 
     it('should deactivate room when last member (owner) leaves', async () => {
@@ -463,9 +495,9 @@ describe('RoomsService', () => {
 
       mockRoomRepository.findOne.mockResolvedValue(mockRoom);
       mockRoomMemberRepository.findOne.mockResolvedValue(ownerMember);
-      mockRoomMemberRepository.remove.mockResolvedValue(ownerMember);
-      mockRoomMemberRepository.find.mockResolvedValue([]);
-      mockRoomRepository.save.mockResolvedValue({
+      mockQueryRunner.manager.remove.mockResolvedValue(ownerMember);
+      mockQueryRunner.manager.find.mockResolvedValue([]);
+      mockQueryRunner.manager.save.mockResolvedValue({
         ...mockRoom,
         isActive: false,
         ownerId: null,
@@ -474,12 +506,14 @@ describe('RoomsService', () => {
       const result = await service.leaveRoom(userId, roomCode);
 
       expect(result.message).toBe('Successfully left the room');
-      expect(mockRoomRepository.save).toHaveBeenCalledWith(
+      expect(mockQueryRunner.manager.save).toHaveBeenCalledWith(
         expect.objectContaining({
           isActive: false,
           ownerId: null,
         }),
       );
+      expect(mockQueryRunner.commitTransaction).toHaveBeenCalled();
+      expect(mockQueryRunner.release).toHaveBeenCalled();
     });
 
     it('should throw NotFoundException if room does not exist', async () => {
@@ -644,10 +678,15 @@ describe('RoomsService', () => {
         },
       ];
 
-      mockRoomMemberRepository.find.mockResolvedValue(mockMemberships);
-      mockRoomMemberRepository.count
-        .mockResolvedValueOnce(5)
-        .mockResolvedValueOnce(10);
+      const mockRawResults = [
+        { memberCount: '5' },
+        { memberCount: '10' },
+      ];
+
+      mockQueryBuilder.getRawAndEntities.mockResolvedValue({
+        entities: mockMemberships,
+        raw: mockRawResults,
+      });
 
       const result = await service.getMyRooms(userId);
 
@@ -664,7 +703,10 @@ describe('RoomsService', () => {
     it('should return empty array if user is not in any rooms', async () => {
       const userId = 'user-1';
 
-      mockRoomMemberRepository.find.mockResolvedValue([]);
+      mockQueryBuilder.getRawAndEntities.mockResolvedValue({
+        entities: [],
+        raw: [],
+      });
 
       const result = await service.getMyRooms(userId);
 

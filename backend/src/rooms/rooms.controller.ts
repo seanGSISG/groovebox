@@ -56,6 +56,15 @@ export class RoomsController {
   }
 
   /**
+   * GET /rooms/my-rooms - Get all rooms where user is a member
+   */
+  @Get('my-rooms')
+  @HttpCode(HttpStatus.OK)
+  async getMyRooms(@Request() req): Promise<UserRoomDto[]> {
+    return this.roomsService.getMyRooms(req.user.id);
+  }
+
+  /**
    * GET /rooms/:code - Get room details
    */
   @Get(':code')
@@ -65,14 +74,5 @@ export class RoomsController {
     @Param('code') code: string,
   ): Promise<RoomDetailsDto> {
     return this.roomsService.getRoomDetails(req.user.id, code.toUpperCase());
-  }
-
-  /**
-   * GET /rooms/my-rooms - Get all rooms where user is a member
-   */
-  @Get('my-rooms')
-  @HttpCode(HttpStatus.OK)
-  async getMyRooms(@Request() req): Promise<UserRoomDto[]> {
-    return this.roomsService.getMyRooms(req.user.id);
   }
 }
