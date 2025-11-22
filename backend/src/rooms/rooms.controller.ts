@@ -8,9 +8,11 @@ import {
   Request,
   HttpCode,
   HttpStatus,
+  Query,
 } from '@nestjs/common';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto, JoinRoomDto, RoomDetailsDto, RoomMemberDto, UserRoomDto } from './dto';
+import { MessageDto, SetDjDto } from './dto/message.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('rooms')
@@ -74,5 +76,32 @@ export class RoomsController {
     @Param('code') code: string,
   ): Promise<RoomDetailsDto> {
     return this.roomsService.getRoomDetails(req.user.id, code.toUpperCase());
+  }
+
+  /**
+   * GET /rooms/:code/messages - Get recent messages
+   */
+  @Get(':code/messages')
+  @HttpCode(HttpStatus.OK)
+  async getMessages(
+    @Request() req,
+    @Param('code') code: string,
+    @Query('limit') limit?: number,
+  ): Promise<MessageDto[]> {
+    const messageLimit = limit ? Math.min(limit, 100) : 50;
+    return this.roomsService.getMessages(req.user.id, code.toUpperCase(), messageLimit);
+  }
+
+  /**
+   * POST /rooms/:code/set-dj - Set the current DJ (owner only)
+   */
+  @Post(':code/set-dj')
+  @HttpCode(HttpStatus.OK)
+  async setDj(
+    @Request() req,
+    @Param('code') code: string,
+    @Body() setDjDto: SetDjDto,
+  ): Promise<{ success: boolean; djId: string }> {
+    return this.roomsService.setDj(req.user.id, code.toUpperCase(), setDjDto);
   }
 }

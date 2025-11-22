@@ -7,12 +7,18 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { Room } from '../entities/room.entity';
 import { RoomMember, RoomMemberRole } from '../entities/room-member.entity';
 import { User } from '../entities/user.entity';
+import { Message } from '../entities/message.entity';
+import { RoomDjHistory, RemovalReason } from '../entities/room-dj-history.entity';
 import { CreateRoomDto, JoinRoomDto, RoomDetailsDto, RoomMemberDto, UserRoomDto } from './dto';
+import { MessageDto, SetDjDto } from './dto/message.dto';
+import { RedisService } from '../redis/redis.service';
+import type { RoomGateway } from '../gateway/room.gateway';
+import { Inject, forwardRef } from '@nestjs/common';
 
 @Injectable()
 export class RoomsService {
@@ -27,6 +33,13 @@ export class RoomsService {
     private readonly roomMemberRepository: Repository<RoomMember>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Message)
+    private readonly messageRepository: Repository<Message>,
+    @InjectRepository(RoomDjHistory)
+    private readonly roomDjHistoryRepository: Repository<RoomDjHistory>,
+    private readonly redisService: RedisService,
+    @Inject(forwardRef(() => 'RoomGateway'))
+    private readonly roomGateway?: RoomGateway,
   ) {}
 
   /**
@@ -349,6 +362,126 @@ export class RoomsService {
     });
 
     return rooms;
+  }
+
+  /**
+   * Get recent messages for a room
+   */
+  async getMessages(userId: string, roomCode: string, limit: number = 50): Promise<MessageDto[]> {
+    // Find room by code
+    const room = await this.roomRepository.findOne({ where: { roomCode } });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    // Check if user is a member
+    const isMember = await this.roomMemberRepository.findOne({
+      where: { roomId: room.id, userId },
+    });
+
+    if (!isMember) {
+      throw new ForbiddenException('You must be a member to view messages');
+    }
+
+    // Get recent messages
+    const messages = await this.messageRepository.find({
+      where: { roomId: room.id },
+      relations: ['user'],
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
+
+    // Map to DTOs (reverse to chronological order)
+    return messages.reverse().map((message) => ({
+      id: message.id,
+      roomId: message.roomId,
+      userId: message.userId,
+      username: message.user?.username || '',
+      displayName: message.user?.displayName || '',
+      content: message.content,
+      createdAt: message.createdAt,
+    }));
+  }
+
+  /**
+   * Set the current DJ for a room (owner only)
+   */
+  async setDj(userId: string, roomCode: string, setDjDto: SetDjDto): Promise<{ success: boolean; djId: string }> {
+    const { userId: djUserId } = setDjDto;
+
+    // Find room by code
+    const room = await this.roomRepository.findOne({ where: { roomCode } });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    // Verify requester is the owner
+    if (room.ownerId !== userId) {
+      throw new ForbiddenException('Only the room owner can set the DJ');
+    }
+
+    // Verify the new DJ is a member of the room
+    const djMember = await this.roomMemberRepository.findOne({
+      where: { roomId: room.id, userId: djUserId },
+    });
+
+    if (!djMember) {
+      throw new BadRequestException('User is not a member of this room');
+    }
+
+    // Get current DJ from Redis
+    const currentDjId = await this.redisService.getCurrentDj(room.id);
+
+    // If there's a current DJ, end their session
+    if (currentDjId && currentDjId !== djUserId) {
+      const currentDjHistory = await this.roomDjHistoryRepository.findOne({
+        where: { roomId: room.id, userId: currentDjId, removedAt: IsNull() },
+        order: { becameDjAt: 'DESC' },
+      });
+
+      if (currentDjHistory) {
+        currentDjHistory.removedAt = new Date();
+        currentDjHistory.removalReason = RemovalReason.VOLUNTARY;
+        await this.roomDjHistoryRepository.save(currentDjHistory);
+      }
+
+      // Update old DJ's role
+      const oldDjMember = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: currentDjId },
+      });
+      if (oldDjMember && oldDjMember.role === RoomMemberRole.DJ) {
+        oldDjMember.role = RoomMemberRole.LISTENER;
+        await this.roomMemberRepository.save(oldDjMember);
+      }
+    }
+
+    // Set new DJ in Redis
+    await this.redisService.setCurrentDj(room.id, djUserId);
+
+    // Update new DJ's role
+    djMember.role = RoomMemberRole.DJ;
+    await this.roomMemberRepository.save(djMember);
+
+    // Create DJ history entry
+    const djHistory = this.roomDjHistoryRepository.create({
+      roomId: room.id,
+      userId: djUserId,
+      removedAt: null,
+      removalReason: null,
+    });
+    await this.roomDjHistoryRepository.save(djHistory);
+
+    // Broadcast dj:changed event via WebSocket
+    if (this.roomGateway?.server) {
+      this.roomGateway.server.to(`room:${room.id}`).emit('dj:changed', {
+        roomId: room.id,
+        djId: djUserId,
+        username: djMember.user?.username || '',
+        displayName: djMember.user?.displayName || '',
+      });
+    }
+
+    return { success: true, djId: djUserId };
   }
 
   /**

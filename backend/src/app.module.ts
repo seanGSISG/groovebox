@@ -5,6 +5,8 @@ import { AppService } from './app.service';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './auth/auth.module';
 import { RoomsModule } from './rooms/rooms.module';
+import { RedisModule } from './redis/redis.module';
+import { GatewayModule } from './gateway/gateway.module';
 
 @Module({
   imports: [
@@ -13,8 +15,10 @@ import { RoomsModule } from './rooms/rooms.module';
       envFilePath: '.env',
     }),
     DatabaseModule,
+    RedisModule,
     AuthModule,
     RoomsModule,
+    GatewayModule,
   ],
   controllers: [AppController],
   providers: [AppService],
