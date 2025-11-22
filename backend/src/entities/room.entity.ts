@@ -13,7 +13,7 @@ import { RoomMember } from './room-member.entity';
 import { Vote } from './vote.entity';
 import { RoomDjHistory } from './room-dj-history.entity';
 
-interface RoomSettings {
+export interface RoomSettings {
   maxMembers: number;
   mutinyThreshold: number;
   djCooldownMinutes: number;
