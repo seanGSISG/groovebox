@@ -27,6 +27,8 @@ describe('RedisService', () => {
       del: jest.fn(),
       hmset: jest.fn(),
       quit: jest.fn(),
+      keys: jest.fn(),
+      get: jest.fn(),
     } as any;
 
     (Redis as jest.MockedClass<typeof Redis>).mockImplementation(() => mockRedisClient);
@@ -210,6 +212,98 @@ describe('RedisService', () => {
         position: null,
         lastUpdate: null,
       });
+    });
+  });
+
+  describe('getMaxRttForRoom', () => {
+    it('should return default RTT (50ms) when no RTT keys exist', async () => {
+      mockRedisClient.keys.mockResolvedValue([]);
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(mockRedisClient.keys).toHaveBeenCalledWith('socket:*:user.lastRtt');
+      expect(result).toBe(50);
+    });
+
+    it('should return maximum RTT value from multiple sockets', async () => {
+      const mockKeys = [
+        'socket:abc123:user.lastRtt',
+        'socket:def456:user.lastRtt',
+        'socket:ghi789:user.lastRtt',
+      ];
+
+      mockRedisClient.keys.mockResolvedValue(mockKeys);
+      mockRedisClient.get
+        .mockResolvedValueOnce('45')
+        .mockResolvedValueOnce('120')
+        .mockResolvedValueOnce('80');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(mockRedisClient.keys).toHaveBeenCalledWith('socket:*:user.lastRtt');
+      expect(mockRedisClient.get).toHaveBeenCalledTimes(3);
+      expect(result).toBe(120);
+    });
+
+    it('should handle null RTT values by using default (50ms)', async () => {
+      const mockKeys = [
+        'socket:abc123:user.lastRtt',
+        'socket:def456:user.lastRtt',
+      ];
+
+      mockRedisClient.keys.mockResolvedValue(mockKeys);
+      mockRedisClient.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce('75');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(75);
+    });
+
+    it('should return default RTT (50ms) when all values are null', async () => {
+      const mockKeys = [
+        'socket:abc123:user.lastRtt',
+        'socket:def456:user.lastRtt',
+      ];
+
+      mockRedisClient.keys.mockResolvedValue(mockKeys);
+      mockRedisClient.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(50);
+    });
+
+    it('should return maximum RTT even when some values are below default', async () => {
+      const mockKeys = [
+        'socket:abc123:user.lastRtt',
+        'socket:def456:user.lastRtt',
+        'socket:ghi789:user.lastRtt',
+      ];
+
+      mockRedisClient.keys.mockResolvedValue(mockKeys);
+      mockRedisClient.get
+        .mockResolvedValueOnce('20')
+        .mockResolvedValueOnce('30')
+        .mockResolvedValueOnce('25');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(30);
+    });
+
+    it('should handle single socket RTT', async () => {
+      const mockKeys = ['socket:abc123:user.lastRtt'];
+
+      mockRedisClient.keys.mockResolvedValue(mockKeys);
+      mockRedisClient.get.mockResolvedValueOnce('95');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(95);
     });
   });
 

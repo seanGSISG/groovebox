@@ -21,11 +21,18 @@ describe('RoomGateway', () => {
     verifyAsync: jest.fn(),
   };
 
+  const mockRedisClient = {
+    set: jest.fn(),
+    get: jest.fn(),
+  };
+
   const mockRedisService = {
     getCurrentDj: jest.fn(),
     setCurrentDj: jest.fn(),
     setPlaybackState: jest.fn(),
     getPlaybackState: jest.fn(),
+    getMaxRttForRoom: jest.fn(),
+    getClient: jest.fn(() => mockRedisClient),
   };
 
   const mockRoomRepository = {
@@ -319,7 +326,7 @@ describe('RoomGateway', () => {
   });
 
   describe('handlePlaybackStart', () => {
-    it('should allow DJ to start playback', async () => {
+    it('should allow DJ to start playback with sync buffer', async () => {
       const mockClient = {
         data: { userId: 'dj-123', username: 'djuser' },
       } as unknown as Socket;
@@ -331,6 +338,8 @@ describe('RoomGateway', () => {
 
       mockRoomRepository.findOne.mockResolvedValue(mockRoom);
       mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(50); // Default RTT
+      mockRedisClient.set.mockResolvedValue('OK');
 
       gateway.server = {
         to: jest.fn().mockReturnThis(),
@@ -344,14 +353,124 @@ describe('RoomGateway', () => {
       });
 
       expect(mockRedisService.getCurrentDj).toHaveBeenCalledWith('room-123');
+      expect(mockRedisService.getMaxRttForRoom).toHaveBeenCalledWith('room-123');
+
+      // Should store enhanced playback state
+      expect(mockRedisClient.set).toHaveBeenCalledWith(
+        'room:room-123:state.playback',
+        expect.stringContaining('playing')
+      );
+
+      // Should also store legacy playback state
       expect(mockRedisService.setPlaybackState).toHaveBeenCalledWith(
         'room-123',
         'playing',
         'track-456',
         0,
       );
+
       expect(gateway.server.to).toHaveBeenCalledWith('room:room-123');
       expect(result.success).toBe(true);
+      expect(result.syncBufferMs).toBe(100); // DEFAULT_BUFFER_MS for 50ms RTT
+      expect(result.startAtServerTime).toBeDefined();
+      expect(result.serverTimestamp).toBeDefined();
+      expect(result.trackId).toBe('track-456');
+    });
+
+    it('should calculate adaptive sync buffer for high RTT', async () => {
+      const mockClient = {
+        data: { userId: 'dj-123', username: 'djuser' },
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(150); // High RTT
+      mockRedisClient.set.mockResolvedValue('OK');
+
+      gateway.server = {
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as any;
+
+      const result = await gateway.handlePlaybackStart(mockClient, {
+        roomCode: 'ABC123',
+        trackId: 'track-456',
+        position: 0,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.syncBufferMs).toBe(300); // 150 * 2 = 300ms
+    });
+
+    it('should cap sync buffer at MAX_BUFFER_MS for very high RTT', async () => {
+      const mockClient = {
+        data: { userId: 'dj-123', username: 'djuser' },
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(500); // Very high RTT
+      mockRedisClient.set.mockResolvedValue('OK');
+
+      gateway.server = {
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as any;
+
+      const result = await gateway.handlePlaybackStart(mockClient, {
+        roomCode: 'ABC123',
+        trackId: 'track-456',
+        position: 0,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.syncBufferMs).toBe(500); // Capped at MAX_BUFFER_MS (500ms)
+    });
+
+    it('should store playback state with correct format', async () => {
+      const mockClient = {
+        data: { userId: 'dj-123', username: 'djuser' },
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(50);
+      mockRedisClient.set.mockResolvedValue('OK');
+
+      gateway.server = {
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as any;
+
+      await gateway.handlePlaybackStart(mockClient, {
+        roomCode: 'ABC123',
+        trackId: 'track-456',
+        position: 0,
+      });
+
+      const storeCall = mockRedisClient.set.mock.calls[0];
+      expect(storeCall[0]).toBe('room:room-123:state.playback');
+
+      const storedState = JSON.parse(storeCall[1]);
+      expect(storedState.playing).toBe(true);
+      expect(storedState.trackId).toBe('track-456');
+      expect(storedState.startAtServerTime).toBeDefined();
+      expect(storedState.startedAt).toBeDefined();
     });
 
     it('should reject non-DJ from starting playback', async () => {

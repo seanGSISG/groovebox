@@ -23,6 +23,7 @@ import {
   PlaybackPauseDto,
   PlaybackStopDto,
 } from './dto/websocket-events.dto';
+import { SyncBufferHelper } from './helpers/sync-buffer.helper';
 import xss from 'xss';
 
 interface AuthenticatedSocket extends Socket {
@@ -280,22 +281,42 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return { error: 'Only the current DJ can start playback' };
       }
 
-      // Update Redis room state
+      // Calculate adaptive sync buffer based on room RTT
+      const maxRtt = await this.redisService.getMaxRttForRoom(room.id);
+      const syncBufferMs = SyncBufferHelper.calculateSyncBuffer(maxRtt);
+      const serverTimestamp = Date.now();
+      const startAtServerTime = serverTimestamp + syncBufferMs;
+
+      // Build response with sync timing info
+      const response: PlaybackStartDto = {
+        roomCode,
+        trackId,
+        position,
+        startAtServerTime,
+        syncBufferMs,
+        serverTimestamp,
+      };
+
+      // Store enhanced playback state in Redis
+      await this.redisService.getClient().set(
+        `room:${room.id}:state.playback`,
+        JSON.stringify({
+          playing: true,
+          trackId,
+          startAtServerTime,
+          startedAt: serverTimestamp,
+        })
+      );
+
+      // Also update legacy playback state for backward compatibility
       await this.redisService.setPlaybackState(room.id, 'playing', trackId, position);
 
       // Broadcast to all room members
-      const payload = {
-        roomId: room.id,
-        trackId,
-        position,
-        timestamp: Date.now(),
-      };
+      this.server.to(`room:${room.id}`).emit('playback:start', response);
 
-      this.server.to(`room:${room.id}`).emit('playback:start', payload);
+      this.logger.log(`Playback started in room ${roomCode} by ${client.data.username} (sync buffer: ${syncBufferMs}ms)`);
 
-      this.logger.log(`Playback started in room ${roomCode} by ${client.data.username}`);
-
-      return { success: true, ...payload };
+      return { success: true, ...response };
     } catch (error) {
       this.logger.error(`Error starting playback: ${error.message}`);
       return { error: 'Failed to start playback' };

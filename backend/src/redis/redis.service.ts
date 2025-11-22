@@ -30,6 +30,18 @@ export class RedisService implements OnModuleDestroy {
     return this.client;
   }
 
+  // Get maximum RTT for room (for adaptive sync buffer)
+  async getMaxRttForRoom(roomId: string): Promise<number> {
+    const pattern = `socket:*:user.lastRtt`;
+    const keys = await this.client.keys(pattern);
+    if (keys.length === 0) return 50; // default 50ms
+
+    const rtts = await Promise.all(
+      keys.map(key => this.client.get(key))
+    );
+    return Math.max(...rtts.map(r => parseFloat(r || '50')));
+  }
+
   async onModuleDestroy() {
     await this.client.quit();
   }
