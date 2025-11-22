@@ -2,7 +2,7 @@ export interface Room {
   id: string;
   roomCode: string;
   roomName: string;
-  ownerI: string;
+  ownerId: string;
   memberCount?: number;
   hasPassword: boolean;
 }

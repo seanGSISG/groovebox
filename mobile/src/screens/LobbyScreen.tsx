@@ -92,6 +92,15 @@ export const LobbyScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
             editable={!loading}
           />
 
+          <TextInput
+            style={styles.input}
+            placeholder="Password (Optional)"
+            value={roomPassword}
+            onChangeText={setRoomPassword}
+            secureTextEntry
+            editable={!loading}
+          />
+
           <TouchableOpacity
             style={[styles.button, loading && styles.buttonDisabled]}
             onPress={joinRoom}
