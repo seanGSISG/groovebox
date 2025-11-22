@@ -24,6 +24,7 @@ import {
   PlaybackStopDto,
 } from './dto/websocket-events.dto';
 import { SyncBufferHelper } from './helpers/sync-buffer.helper';
+import { PlaybackSyncService } from './services/playback-sync.service';
 import xss from 'xss';
 
 interface AuthenticatedSocket extends Socket {
@@ -48,6 +49,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
+    private readonly playbackSyncService: PlaybackSyncService,
     @InjectRepository(Room)
     private readonly roomRepository: Repository<Room>,
     @InjectRepository(RoomMember)
@@ -327,6 +329,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Broadcast to all room members
       this.server.to(`room:${room.id}`).emit('playback:start', response);
 
+      // Start periodic sync broadcasts
+      this.playbackSyncService.startSyncBroadcast(room.id);
+
       this.logger.log(`Playback started in room ${roomCode} by ${client.data.username} (sync buffer: ${syncBufferMs}ms)`);
 
       return { success: true, ...response };
@@ -361,6 +366,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Update Redis room state
       await this.redisService.setPlaybackState(room.id, 'paused', undefined, position);
+
+      // Stop periodic sync broadcasts
+      this.playbackSyncService.stopSyncBroadcast(room.id);
 
       // Broadcast to all room members
       const payload = {
@@ -405,6 +413,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Update Redis room state
       await this.redisService.setPlaybackState(room.id, 'stopped');
+
+      // Stop periodic sync broadcasts
+      this.playbackSyncService.stopSyncBroadcast(room.id);
 
       // Broadcast to all room members
       const payload = {

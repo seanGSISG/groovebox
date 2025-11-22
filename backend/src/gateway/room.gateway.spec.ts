@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoomGateway } from './room.gateway';
 import { RedisService } from '../redis/redis.service';
+import { PlaybackSyncService } from './services/playback-sync.service';
 import { Room, RoomMember, User, Message, RoomDjHistory, RoomMemberRole, RemovalReason } from '../entities';
 import { Socket } from 'socket.io';
 
@@ -11,6 +12,7 @@ describe('RoomGateway', () => {
   let gateway: RoomGateway;
   let jwtService: JwtService;
   let redisService: RedisService;
+  let playbackSyncService: PlaybackSyncService;
   let roomRepository: Repository<Room>;
   let roomMemberRepository: Repository<RoomMember>;
   let userRepository: Repository<User>;
@@ -36,6 +38,11 @@ describe('RoomGateway', () => {
     addSocketToRoom: jest.fn(),
     removeSocketFromRoom: jest.fn(),
     getSocketsInRoom: jest.fn(),
+  };
+
+  const mockPlaybackSyncService = {
+    startSyncBroadcast: jest.fn(),
+    stopSyncBroadcast: jest.fn(),
   };
 
   const mockRoomRepository = {
@@ -75,6 +82,10 @@ describe('RoomGateway', () => {
           useValue: mockRedisService,
         },
         {
+          provide: PlaybackSyncService,
+          useValue: mockPlaybackSyncService,
+        },
+        {
           provide: getRepositoryToken(Room),
           useValue: mockRoomRepository,
         },
@@ -98,6 +109,7 @@ describe('RoomGateway', () => {
     }).compile();
 
     gateway = module.get<RoomGateway>(RoomGateway);
+    playbackSyncService = module.get<PlaybackSyncService>(PlaybackSyncService);
     jwtService = module.get<JwtService>(JwtService);
     redisService = module.get<RedisService>(RedisService);
     roomRepository = module.get<Repository<Room>>(getRepositoryToken(Room));
