@@ -32,6 +32,10 @@ describe('RedisService', () => {
       keys: jest.fn(),
       expire: jest.fn(),
       multi: jest.fn(),
+      smembers: jest.fn(),
+      mget: jest.fn(),
+      sadd: jest.fn(),
+      srem: jest.fn(),
     } as any;
 
     // Mock multi() to return a chainable object
@@ -340,27 +344,49 @@ describe('RedisService', () => {
     });
   });
 
+  describe('addSocketToRoom', () => {
+    it('should add socket to room membership set', async () => {
+      mockRedisClient.sadd.mockResolvedValue(1);
+
+      await service.addSocketToRoom('room-123', 'socket-456');
+
+      expect(mockRedisClient.sadd).toHaveBeenCalledWith('room:room-123:sockets', 'socket-456');
+    });
+  });
+
+  describe('removeSocketFromRoom', () => {
+    it('should remove socket from room membership set', async () => {
+      mockRedisClient.srem.mockResolvedValue(1);
+
+      await service.removeSocketFromRoom('room-123', 'socket-456');
+
+      expect(mockRedisClient.srem).toHaveBeenCalledWith('room:room-123:sockets', 'socket-456');
+    });
+  });
+
   describe('getMaxRttForRoom', () => {
-    it('should return max RTT from all sockets', async () => {
-      mockRedisClient.keys.mockResolvedValue([
-        'socket:socket-1:sync.lastRtt',
-        'socket:socket-2:sync.lastRtt',
-        'socket:socket-3:sync.lastRtt',
+    it('should return max RTT from all sockets in room', async () => {
+      mockRedisClient.smembers.mockResolvedValue([
+        'socket-1',
+        'socket-2',
+        'socket-3',
       ]);
 
-      mockRedisClient.get
-        .mockResolvedValueOnce('50')
-        .mockResolvedValueOnce('150')
-        .mockResolvedValueOnce('100');
+      mockRedisClient.mget.mockResolvedValue(['50', '150', '100']);
 
       const result = await service.getMaxRttForRoom('room-123');
 
-      expect(mockRedisClient.keys).toHaveBeenCalledWith('socket:*:sync.lastRtt');
+      expect(mockRedisClient.smembers).toHaveBeenCalledWith('room:room-123:sockets');
+      expect(mockRedisClient.mget).toHaveBeenCalledWith(
+        'socket:socket-1:sync.lastRtt',
+        'socket:socket-2:sync.lastRtt',
+        'socket:socket-3:sync.lastRtt',
+      );
       expect(result).toBe(150);
     });
 
-    it('should return null if no sockets found', async () => {
-      mockRedisClient.keys.mockResolvedValue([]);
+    it('should return null if no sockets in room', async () => {
+      mockRedisClient.smembers.mockResolvedValue([]);
 
       const result = await service.getMaxRttForRoom('room-123');
 
@@ -368,14 +394,8 @@ describe('RedisService', () => {
     });
 
     it('should return null if all RTTs are zero', async () => {
-      mockRedisClient.keys.mockResolvedValue([
-        'socket:socket-1:sync.lastRtt',
-        'socket:socket-2:sync.lastRtt',
-      ]);
-
-      mockRedisClient.get
-        .mockResolvedValueOnce('0')
-        .mockResolvedValueOnce('0');
+      mockRedisClient.smembers.mockResolvedValue(['socket-1', 'socket-2']);
+      mockRedisClient.mget.mockResolvedValue(['0', '0']);
 
       const result = await service.getMaxRttForRoom('room-123');
 
@@ -383,14 +403,8 @@ describe('RedisService', () => {
     });
 
     it('should handle null values from Redis', async () => {
-      mockRedisClient.keys.mockResolvedValue([
-        'socket:socket-1:sync.lastRtt',
-        'socket:socket-2:sync.lastRtt',
-      ]);
-
-      mockRedisClient.get
-        .mockResolvedValueOnce('100')
-        .mockResolvedValueOnce(null);
+      mockRedisClient.smembers.mockResolvedValue(['socket-1', 'socket-2']);
+      mockRedisClient.mget.mockResolvedValue(['100', null]);
 
       const result = await service.getMaxRttForRoom('room-123');
 
@@ -398,14 +412,8 @@ describe('RedisService', () => {
     });
 
     it('should handle floating point RTT values', async () => {
-      mockRedisClient.keys.mockResolvedValue([
-        'socket:socket-1:sync.lastRtt',
-        'socket:socket-2:sync.lastRtt',
-      ]);
-
-      mockRedisClient.get
-        .mockResolvedValueOnce('50.5')
-        .mockResolvedValueOnce('100.75');
+      mockRedisClient.smembers.mockResolvedValue(['socket-1', 'socket-2']);
+      mockRedisClient.mget.mockResolvedValue(['50.5', '100.75']);
 
       const result = await service.getMaxRttForRoom('room-123');
 

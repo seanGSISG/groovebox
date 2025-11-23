@@ -124,25 +124,38 @@ export class RedisService implements OnModuleDestroy {
     };
   }
 
-  async getMaxRttForRoom(roomId: string): Promise<number | null> {
-    // Get all socket IDs in the room by querying socket keys
-    // This is a simplified implementation - in production, you'd maintain
-    // a set of socket IDs per room
-    const pattern = `socket:*:sync.lastRtt`;
-    const keys = await this.client.keys(pattern);
+  // Room membership tracking for RTT calculations
+  async addSocketToRoom(roomId: string, socketId: string): Promise<void> {
+    await this.client.sadd(`room:${roomId}:sockets`, socketId);
+  }
 
-    if (keys.length === 0) {
+  async removeSocketFromRoom(roomId: string, socketId: string): Promise<void> {
+    await this.client.srem(`room:${roomId}:sockets`, socketId);
+  }
+
+  async getMaxRttForRoom(roomId: string): Promise<number | null> {
+    // Get all socket IDs in the room from the set
+    const socketIds = await this.client.smembers(`room:${roomId}:sockets`);
+
+    if (socketIds.length === 0) {
       return null;
     }
 
-    const rtts = await Promise.all(
-      keys.map(async (key) => {
-        const value = await this.client.get(key);
-        return value ? parseFloat(value) : 0;
-      }),
-    );
+    // Get RTT values for all sockets using MGET
+    const rttKeys = socketIds.map(id => `socket:${id}:sync.lastRtt`);
+    const rttValues = await this.client.mget(...rttKeys);
 
-    const maxRtt = Math.max(...rtts);
-    return maxRtt > 0 ? maxRtt : null;
+    // Parse and filter valid RTT values
+    const rtts = rttValues
+      .filter(value => value !== null)
+      .map(value => parseFloat(value as string))
+      .filter(value => !isNaN(value) && value > 0);
+
+    if (rtts.length === 0) {
+      return null;
+    }
+
+    // Return the maximum RTT
+    return Math.max(...rtts);
   }
 }

@@ -43,10 +43,13 @@ describe('SyncGateway', () => {
       const result = await gateway.handleSyncPing(mockClient, { clientTimestamp });
 
       expect(result).toHaveProperty('clientTimestamp', clientTimestamp);
+      expect(result).toHaveProperty('serverReceiveTime');
       expect(result).toHaveProperty('serverTimestamp');
       expect(result).toHaveProperty('serverProcessTime');
+      expect(typeof result.serverReceiveTime).toBe('number');
       expect(typeof result.serverTimestamp).toBe('number');
-      expect(result.serverTimestamp).toBeGreaterThanOrEqual(clientTimestamp - 1000);
+      expect(result.serverTimestamp).toBeGreaterThanOrEqual(result.serverReceiveTime);
+      expect(result.serverReceiveTime).toBeGreaterThanOrEqual(clientTimestamp - 1000);
     });
 
     it('should reject timestamp too far in the past', async () => {
@@ -94,6 +97,7 @@ describe('SyncGateway', () => {
 
       expect(results).toHaveLength(5);
       results.forEach((result) => {
+        expect(result).toHaveProperty('serverReceiveTime');
         expect(result).toHaveProperty('serverTimestamp');
         expect(result).not.toHaveProperty('error');
       });
@@ -157,52 +161,67 @@ describe('SyncGateway', () => {
       );
     });
 
-    it('should reject unreasonable offset', async () => {
+    it('should accept offset at upper boundary', async () => {
       const mockClient = {
         id: 'socket-123',
         data: { userId: 'user-123', username: 'testuser' },
       } as unknown as Socket;
 
-      const offset = 4000000; // 1+ hour offset
+      const offset = 3600000; // Exactly 1 hour
       const rtt = 50;
 
+      mockRedisService.setSocketSyncState.mockResolvedValue(undefined);
+
       const result = await gateway.handleSyncUpdate(mockClient, { offset, rtt });
 
-      expect(result).toHaveProperty('error');
-      expect(result.error).toBe('Offset is unreasonable');
-      expect(mockRedisService.setSocketSyncState).not.toHaveBeenCalled();
+      expect(result).toEqual({ success: true, offset, rtt });
+      expect(mockRedisService.setSocketSyncState).toHaveBeenCalledWith(
+        'socket-123',
+        offset,
+        rtt,
+      );
     });
 
-    it('should reject negative RTT', async () => {
+    it('should accept offset at lower boundary', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+      } as unknown as Socket;
+
+      const offset = -3600000; // Exactly -1 hour
+      const rtt = 50;
+
+      mockRedisService.setSocketSyncState.mockResolvedValue(undefined);
+
+      const result = await gateway.handleSyncUpdate(mockClient, { offset, rtt });
+
+      expect(result).toEqual({ success: true, offset, rtt });
+      expect(mockRedisService.setSocketSyncState).toHaveBeenCalledWith(
+        'socket-123',
+        offset,
+        rtt,
+      );
+    });
+
+    it('should accept RTT at upper boundary', async () => {
       const mockClient = {
         id: 'socket-123',
         data: { userId: 'user-123', username: 'testuser' },
       } as unknown as Socket;
 
       const offset = 50;
-      const rtt = -10;
+      const rtt = 10000; // Exactly 10 seconds
+
+      mockRedisService.setSocketSyncState.mockResolvedValue(undefined);
 
       const result = await gateway.handleSyncUpdate(mockClient, { offset, rtt });
 
-      expect(result).toHaveProperty('error');
-      expect(result.error).toBe('RTT is unreasonable');
-      expect(mockRedisService.setSocketSyncState).not.toHaveBeenCalled();
-    });
-
-    it('should reject excessive RTT', async () => {
-      const mockClient = {
-        id: 'socket-123',
-        data: { userId: 'user-123', username: 'testuser' },
-      } as unknown as Socket;
-
-      const offset = 50;
-      const rtt = 15000; // 15 seconds
-
-      const result = await gateway.handleSyncUpdate(mockClient, { offset, rtt });
-
-      expect(result).toHaveProperty('error');
-      expect(result.error).toBe('RTT is unreasonable');
-      expect(mockRedisService.setSocketSyncState).not.toHaveBeenCalled();
+      expect(result).toEqual({ success: true, offset, rtt });
+      expect(mockRedisService.setSocketSyncState).toHaveBeenCalledWith(
+        'socket-123',
+        offset,
+        rtt,
+      );
     });
 
     it('should handle multiple updates from same client', async () => {
@@ -250,7 +269,7 @@ describe('SyncGateway', () => {
   });
 
   describe('NTP algorithm calculations', () => {
-    it('should provide timestamps for client-side NTP calculations', async () => {
+    it('should provide all required timestamps for NTP calculations', async () => {
       const mockClient = {
         id: 'socket-123',
         data: { userId: 'user-123', username: 'testuser' },
@@ -262,25 +281,99 @@ describe('SyncGateway', () => {
       // Server processes sync:ping
       const response = await gateway.handleSyncPing(mockClient, { clientTimestamp: t1 });
 
-      // T2 would be recorded on server (implicit in response.serverTimestamp)
-      // T3 is in response.serverTimestamp
+      // Verify response contains all required timestamps
+      expect(response).toHaveProperty('clientTimestamp', t1);
+      expect(response).toHaveProperty('serverReceiveTime');
+      expect(response).toHaveProperty('serverTimestamp');
+      expect(response).toHaveProperty('serverProcessTime');
+
+      // Extract timestamps
+      const t2 = response.serverReceiveTime;  // T2: Server receive time
+      const t3 = response.serverTimestamp;     // T3: Server send time
+
+      // Verify timestamp ordering: T1 <= T2 <= T3
+      expect(t2).toBeGreaterThanOrEqual(t1 - 10); // Allow 10ms clock skew
+      expect(t3).toBeGreaterThanOrEqual(t2);
+
+      // Verify serverProcessTime matches T3 - T2
+      expect(response.serverProcessTime).toBe(t3 - t2);
+    });
+
+    it('should verify NTP offset and RTT calculations are correct', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+      } as unknown as Socket;
+
+      // T1: Client timestamp when request sent
+      const t1 = Date.now();
+
+      // Server processes sync:ping
+      const response = await gateway.handleSyncPing(mockClient, { clientTimestamp: t1 });
+
+      // T2: Server time when request received
+      const t2 = response.serverReceiveTime;
+
+      // T3: Server time when response sent
       const t3 = response.serverTimestamp;
 
-      // T4: Client would receive at this time (simulated)
+      // T4: Client time when response received (simulated)
       const t4 = Date.now();
 
-      // Verify we can calculate RTT and offset with the response
-      // RTT = (T4 - T1) - (T3 - T2)
-      // For this test, we approximate T2 ≈ T3 (minimal server processing)
-      const approximateRtt = t4 - t1;
+      // Calculate RTT using NTP formula: RTT = (T4 - T1) - (T3 - T2)
+      const rtt = (t4 - t1) - (t3 - t2);
 
-      // offset = ((T2 - T1) + (T3 - T4)) / 2
-      // This would be calculated on client side
+      // Calculate offset using NTP formula: offset = ((T2 - T1) + (T3 - T4)) / 2
+      const offset = ((t2 - t1) + (t3 - t4)) / 2;
 
-      expect(response.clientTimestamp).toBe(t1);
-      expect(t3).toBeGreaterThanOrEqual(t1);
-      expect(t3).toBeLessThanOrEqual(t4);
-      expect(approximateRtt).toBeGreaterThanOrEqual(0);
+      // Verify RTT is reasonable (should be close to 0 in unit tests)
+      expect(rtt).toBeGreaterThanOrEqual(0);
+      expect(rtt).toBeLessThan(100); // Should be < 100ms in local tests
+
+      // Verify offset is reasonable (should be close to 0 in unit tests)
+      expect(Math.abs(offset)).toBeLessThan(100); // Should be < 100ms in local tests
+
+      // Verify the math is correct
+      const serverProcessTime = t3 - t2;
+      expect(serverProcessTime).toBe(response.serverProcessTime);
+    });
+
+    it('should calculate consistent offset across multiple pings', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+      } as unknown as Socket;
+
+      const offsets: number[] = [];
+      const rtts: number[] = [];
+
+      // Perform 5 sync pings and calculate offset/RTT for each
+      for (let i = 0; i < 5; i++) {
+        const t1 = Date.now();
+        const response = await gateway.handleSyncPing(mockClient, { clientTimestamp: t1 });
+        const t2 = response.serverReceiveTime;
+        const t3 = response.serverTimestamp;
+        const t4 = Date.now();
+
+        const rtt = (t4 - t1) - (t3 - t2);
+        const offset = ((t2 - t1) + (t3 - t4)) / 2;
+
+        offsets.push(offset);
+        rtts.push(rtt);
+
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      // Verify all offsets are reasonably close to each other
+      const avgOffset = offsets.reduce((a, b) => a + b, 0) / offsets.length;
+      offsets.forEach((offset) => {
+        expect(Math.abs(offset - avgOffset)).toBeLessThan(50); // Within 50ms of average
+      });
+
+      // Verify all RTTs are non-negative
+      rtts.forEach((rtt) => {
+        expect(rtt).toBeGreaterThanOrEqual(0);
+      });
     });
 
     it('should handle high-precision timestamps', async () => {

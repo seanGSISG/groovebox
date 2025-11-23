@@ -147,6 +147,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Join the Socket.io room
       await client.join(`room:${room.id}`);
 
+      // Add socket to room membership set for RTT tracking
+      await this.redisService.addSocketToRoom(room.id, client.id);
+
       this.logger.log(`User ${client.data.username} joined room ${roomCode}`);
 
       // Broadcast to other room members
@@ -182,6 +185,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Leave the Socket.io room
       await client.leave(`room:${room.id}`);
+
+      // Remove socket from room membership set
+      await this.redisService.removeSocketFromRoom(room.id, client.id);
 
       this.logger.log(`User ${client.data.username} left room ${roomCode}`);
 

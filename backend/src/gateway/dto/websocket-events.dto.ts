@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, MaxLength, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsNotEmpty, MaxLength, IsOptional, IsNumber, Min, Max } from 'class-validator';
 
 export class RoomJoinDto {
   @IsString()
@@ -68,10 +68,26 @@ export class SyncPongDto {
 
   @IsNumber()
   @Min(0)
-  serverTimestamp: number;
+  serverReceiveTime: number;  // T2 - Server time when request received
+
+  @IsNumber()
+  @Min(0)
+  serverTimestamp: number;  // T3 - Server time when response sent
 
   @IsOptional()
   @IsNumber()
   @Min(0)
   serverProcessTime?: number;
+}
+
+export class SyncUpdateDto {
+  @IsNumber()
+  @Min(-3600000)
+  @Max(3600000)
+  offset: number;
+
+  @IsNumber()
+  @Min(0)
+  @Max(10000)
+  rtt: number;
 }

@@ -8,7 +8,7 @@ import { Socket } from 'socket.io';
 import { Logger, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 import { WsJwtGuard } from './ws-jwt.guard';
-import { SyncPingDto } from './dto/websocket-events.dto';
+import { SyncPingDto, SyncUpdateDto } from './dto/websocket-events.dto';
 
 interface AuthenticatedSocket extends Socket {
   data: {
@@ -68,12 +68,9 @@ export class SyncGateway {
         };
       }
 
-      // Small processing delay to simulate minimal server work
-      const processStartTime = Date.now();
-
       // T3: Server time when response sent
       const serverSendTime = Date.now();
-      const serverProcessTime = serverSendTime - processStartTime;
+      const serverProcessTime = serverSendTime - serverReceiveTime;
 
       this.logger.debug(
         `Sync ping from ${client.data.username} (socket: ${client.id}): ` +
@@ -83,7 +80,8 @@ export class SyncGateway {
       // Return response with all timestamps for client-side NTP calculations
       return {
         clientTimestamp,
-        serverTimestamp: serverSendTime,
+        serverReceiveTime,  // T2 - Server time when request received
+        serverTimestamp: serverSendTime,  // T3 - Server time when response sent
         serverProcessTime,
       };
     } catch (error) {
@@ -101,28 +99,13 @@ export class SyncGateway {
   @SubscribeMessage('sync:update')
   async handleSyncUpdate(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { offset: number; rtt: number },
+    @MessageBody() data: SyncUpdateDto,
   ) {
     try {
       const { offset, rtt } = data;
 
-      // Validate offset and RTT are reasonable
-      const MAX_OFFSET = 3600000; // 1 hour
-      const MAX_RTT = 10000; // 10 seconds
-
-      if (Math.abs(offset) > MAX_OFFSET) {
-        this.logger.warn(
-          `Client ${client.id} sent unreasonable offset: ${offset}ms`,
-        );
-        return { error: 'Offset is unreasonable' };
-      }
-
-      if (rtt < 0 || rtt > MAX_RTT) {
-        this.logger.warn(
-          `Client ${client.id} sent unreasonable RTT: ${rtt}ms`,
-        );
-        return { error: 'RTT is unreasonable' };
-      }
+      // DTO validation ensures offset is between -3600000 and 3600000 (1 hour)
+      // and RTT is between 0 and 10000 (10 seconds)
 
       // Store sync state in Redis
       await this.redisService.setSocketSyncState(client.id, offset, rtt);

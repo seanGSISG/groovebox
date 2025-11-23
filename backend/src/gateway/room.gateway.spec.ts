@@ -26,6 +26,8 @@ describe('RoomGateway', () => {
     setCurrentDj: jest.fn(),
     setPlaybackState: jest.fn(),
     getPlaybackState: jest.fn(),
+    addSocketToRoom: jest.fn(),
+    removeSocketFromRoom: jest.fn(),
   };
 
   const mockRoomRepository = {
