@@ -1149,5 +1149,50 @@ describe('RoomGateway', () => {
         },
       );
     });
+
+    it('should throw WsException when non-member tries to start election', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const roomCode = 'ABC123';
+
+      // Mock room exists
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: 'room1',
+        roomCode,
+      });
+
+      // Mock user is NOT a member
+      mockRoomMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(gateway.handleStartElection(mockClient, roomCode)).rejects.toThrow(
+        'You are not a member of this room',
+      );
+    });
+
+    it('should throw WsException when voting in non-existent vote session', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const voteDto: VoteForDjDto = {
+        voteSessionId: 'nonexistent-vote',
+        targetUserId: 'user2',
+      };
+
+      // Mock Redis hgetall to return empty object (vote session not found)
+      mockRedisClient.hgetall = jest.fn().mockResolvedValue({});
+
+      await expect(gateway.handleVoteForDj(mockClient, voteDto)).rejects.toThrow(
+        'Vote session not found or expired',
+      );
+    });
+
+    it('should throw WsException when starting election in invalid room', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const roomCode = 'INVALID';
+
+      // Mock room not found
+      mockRoomRepository.findOne.mockResolvedValue(null);
+
+      await expect(gateway.handleStartElection(mockClient, roomCode)).rejects.toThrow(
+        'Room not found',
+      );
+    });
   });
 });

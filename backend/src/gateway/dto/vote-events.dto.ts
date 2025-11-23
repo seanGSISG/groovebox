@@ -1,4 +1,4 @@
-import { IsUUID, IsEnum, IsOptional, IsBoolean } from 'class-validator';
+import { IsUUID } from 'class-validator';
 import { VoteType } from '../../entities/vote.entity';
 
 export class StartElectionDto {

@@ -561,11 +561,11 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Check if everyone voted (auto-complete)
       const totalVoted = Object.keys(updatedResults.voteCounts || {}).reduce(
-        (sum, key) => sum + updatedResults.voteCounts[key],
+        (sum, key) => sum + (updatedResults.voteCounts?.[key] || 0),
         0,
       );
 
-      if (totalVoted >= updatedResults.totalVoters) {
+      if (totalVoted > 0 && totalVoted >= updatedResults.totalVoters) {
         // Complete the vote
         const finalResults = await this.votesService.completeVote(voteDto.voteSessionId);
         this.server.to(`room:${room.roomCode}`).emit('vote:complete', finalResults);
