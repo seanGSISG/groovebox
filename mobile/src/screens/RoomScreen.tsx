@@ -138,6 +138,20 @@ const RoomContent: React.FC<{
     }
   }, [currentVote]);
 
+  // Auto-open modal when mutiny starts
+  useEffect(() => {
+    if (currentVote?.voteType === VoteType.MUTINY && !currentVote.isComplete) {
+      setShowMutiny(true);
+    }
+  }, [currentVote]);
+
+  // Auto-close mutiny modal when vote completes
+  useEffect(() => {
+    if (!currentVote && showMutiny) {
+      setShowMutiny(false);
+    }
+  }, [currentVote, showMutiny]);
+
   const sendMessage = () => {
     if (!inputMessage.trim() || !socket) return;
 

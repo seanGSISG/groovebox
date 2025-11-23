@@ -36,7 +36,15 @@ export const MutinyModal: React.FC<MutinyModalProps> = ({
         {
           text: 'Yes, Start Mutiny',
           style: 'destructive',
-          onPress: () => startMutiny(roomCode),
+          onPress: () => {
+            const success = startMutiny(roomCode);
+            if (!success) {
+              Alert.alert(
+                'Error',
+                'Failed to start mutiny. Please check your connection and try again.',
+              );
+            }
+          },
         },
       ],
     );
@@ -44,7 +52,13 @@ export const MutinyModal: React.FC<MutinyModalProps> = ({
 
   const handleVote = (voteValue: boolean) => {
     if (!currentVote) return;
-    voteOnMutiny(currentVote.voteSessionId, voteValue);
+    const success = voteOnMutiny(currentVote.voteSessionId, voteValue);
+    if (!success) {
+      Alert.alert(
+        'Error',
+        'Failed to cast vote. You may have already voted or the session has ended.',
+      );
+    }
   };
 
   const getProgressPercentage = (): number => {
