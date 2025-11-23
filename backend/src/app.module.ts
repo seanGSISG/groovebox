@@ -9,6 +9,7 @@ import { RedisModule } from './redis/redis.module';
 import { GatewayModule } from './gateway/gateway.module';
 import { SyncModule } from './sync/sync.module';
 import { VotesModule } from './votes/votes.module';
+import { YouTubeModule } from './youtube/youtube.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { VotesModule } from './votes/votes.module';
     GatewayModule,
     SyncModule,
     VotesModule,
+    YouTubeModule,
   ],
   controllers: [AppController],
   providers: [AppService],
