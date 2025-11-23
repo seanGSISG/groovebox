@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_CONFIG } from '../config/api';
 import { ServerToClientEvents, ClientToServerEvents } from '../types/socket.types';
+import { AutoPlayPayload } from '../types/queue.types';
 
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -69,6 +70,23 @@ export const useSocket = (): TypedSocket | null => {
       }
     };
   }, []);
+
+  // Listen for queue auto-play events
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleAutoPlay = (payload: AutoPlayPayload) => {
+      // Emit custom event that SyncedAudioPlayer can listen to
+      // or handle via callback passed to hook
+      console.log('Auto-playing next song:', payload.submission);
+    };
+
+    socket.on('queue:auto-play', handleAutoPlay);
+
+    return () => {
+      socket.off('queue:auto-play', handleAutoPlay);
+    };
+  }, [socket]);
 
   return socket;
 };

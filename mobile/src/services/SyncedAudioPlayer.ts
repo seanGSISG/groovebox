@@ -1,10 +1,14 @@
 import TrackPlayer, { State } from 'react-native-track-player';
 import { ClockSyncManager } from './ClockSyncManager';
 import { PlaybackStartEvent, RoomStatePlayback } from '../types/playback.types';
+import { Socket } from 'socket.io-client';
 
 export class SyncedAudioPlayer {
   private syncManager: ClockSyncManager;
   private driftCorrectionInterval: NodeJS.Timeout | null = null;
+  private socket: Socket | null = null;
+  private roomCode: string | null = null;
+  private isDJ: boolean = false;
 
   // Playback metadata
   private currentTrackId: string | null = null;
@@ -16,9 +20,26 @@ export class SyncedAudioPlayer {
   private readonly SEEK_THRESHOLD_MS = 200; // Seek if drift exceeds this
   private readonly DRIFT_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds
 
-  constructor(syncManager: ClockSyncManager) {
+  constructor(
+    syncManager: ClockSyncManager,
+    socket?: Socket,
+    roomCode?: string,
+    isDJ?: boolean,
+  ) {
     this.syncManager = syncManager;
+    this.socket = socket || null;
+    this.roomCode = roomCode || null;
+    this.isDJ = isDJ || false;
     this.initializePlayer();
+  }
+
+  /**
+   * Update connection settings for queue notifications
+   */
+  public setConnectionSettings(socket: Socket, roomCode: string, isDJ: boolean): void {
+    this.socket = socket;
+    this.roomCode = roomCode;
+    this.isDJ = isDJ;
   }
 
   private async initializePlayer(): Promise<void> {
@@ -272,6 +293,26 @@ export class SyncedAudioPlayer {
       console.error('[SyncedAudioPlayer] Playback start error:', error);
     }
   }
+
+  /**
+   * Handle playback end event - notifies server when DJ finishes playing a song
+   * This method should be called when the audio player finishes playing a track
+   */
+  public handlePlaybackEnd = (): void => {
+    // Notify server that playback has ended (DJ only)
+    if (this.socket && this.roomCode && this.isDJ) {
+      console.log('[SyncedAudioPlayer] Notifying server of playback end');
+      this.socket.emit('playback:ended', { roomCode: this.roomCode }, (response: any) => {
+        if (response?.error) {
+          console.error('[SyncedAudioPlayer] Error notifying playback end:', response.error);
+        } else {
+          console.log('[SyncedAudioPlayer] Playback end notification sent successfully');
+        }
+      });
+    } else {
+      console.log('[SyncedAudioPlayer] Skipping playback end notification (not DJ or no connection)');
+    }
+  };
 
   /**
    * Clean up when destroying
