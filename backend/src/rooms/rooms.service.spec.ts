@@ -1005,4 +1005,217 @@ describe('RoomsService', () => {
       );
     });
   });
+
+  describe('setDjByVote', () => {
+    it('should successfully set a DJ based on vote results', async () => {
+      const roomId = 'room-1';
+      const djUserId = 'user-2';
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      const mockDjMember = {
+        id: 'member-2',
+        roomId,
+        userId: djUserId,
+        role: RoomMemberRole.LISTENER,
+        user: {
+          username: 'djuser',
+          displayName: 'DJ User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne
+        .mockResolvedValueOnce(mockDjMember)
+        .mockResolvedValueOnce(null);
+      mockRedisService.getCurrentDj.mockResolvedValue(null);
+      mockRedisService.setCurrentDj.mockResolvedValue(undefined);
+      mockRoomMemberRepository.save.mockResolvedValue({
+        ...mockDjMember,
+        role: RoomMemberRole.DJ,
+      });
+      mockRoomDjHistoryRepository.create.mockReturnValue({
+        roomId,
+        userId: djUserId,
+        removedAt: null,
+        removalReason: null,
+      });
+      mockRoomDjHistoryRepository.save.mockResolvedValue({});
+
+      await service.setDjByVote(roomId, djUserId);
+
+      expect(mockRedisService.setCurrentDj).toHaveBeenCalledWith(roomId, djUserId);
+      expect(mockRoomMemberRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ role: RoomMemberRole.DJ }),
+      );
+      expect(mockRoomDjHistoryRepository.save).toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException if room does not exist', async () => {
+      const roomId = 'invalid-room';
+      const djUserId = 'user-2';
+
+      mockRoomRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.setDjByVote(roomId, djUserId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw BadRequestException if user is not a member', async () => {
+      const roomId = 'room-1';
+      const djUserId = 'user-2';
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.setDjByVote(roomId, djUserId)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should replace existing DJ with VOTE removal reason', async () => {
+      const roomId = 'room-1';
+      const oldDjUserId = 'user-2';
+      const newDjUserId = 'user-3';
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      const mockOldDjMember = {
+        id: 'member-2',
+        roomId,
+        userId: oldDjUserId,
+        role: RoomMemberRole.DJ,
+      };
+
+      const mockNewDjMember = {
+        id: 'member-3',
+        roomId,
+        userId: newDjUserId,
+        role: RoomMemberRole.LISTENER,
+        user: {
+          username: 'newdj',
+          displayName: 'New DJ',
+        },
+      };
+
+      const mockOldDjHistory = {
+        id: 'history-1',
+        roomId,
+        userId: oldDjUserId,
+        removedAt: null,
+        removalReason: null,
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne
+        .mockResolvedValueOnce(mockNewDjMember)
+        .mockResolvedValueOnce(mockOldDjMember);
+      mockRedisService.getCurrentDj.mockResolvedValue(oldDjUserId);
+      mockRoomDjHistoryRepository.findOne.mockResolvedValue(mockOldDjHistory);
+      mockRoomDjHistoryRepository.save.mockResolvedValue({});
+      mockRoomMemberRepository.save.mockResolvedValue({});
+      mockRedisService.setCurrentDj.mockResolvedValue(undefined);
+      mockRoomDjHistoryRepository.create.mockReturnValue({
+        roomId,
+        userId: newDjUserId,
+        removedAt: null,
+        removalReason: null,
+      });
+
+      await service.setDjByVote(roomId, newDjUserId);
+
+      expect(mockRoomDjHistoryRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          removedAt: expect.any(Date),
+          removalReason: 'vote',
+        }),
+      );
+    });
+  });
+
+  describe('removeDj', () => {
+    it('should successfully remove current DJ', async () => {
+      const roomId = 'room-1';
+      const currentDjId = 'user-2';
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      const mockDjMember = {
+        id: 'member-2',
+        roomId,
+        userId: currentDjId,
+        role: RoomMemberRole.DJ,
+      };
+
+      const mockDjHistory = {
+        id: 'history-1',
+        roomId,
+        userId: currentDjId,
+        removedAt: null,
+        removalReason: null,
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRedisService.getCurrentDj.mockResolvedValue(currentDjId);
+      mockRoomDjHistoryRepository.findOne.mockResolvedValue(mockDjHistory);
+      mockRoomDjHistoryRepository.save.mockResolvedValue({});
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockDjMember);
+      mockRoomMemberRepository.save.mockResolvedValue({});
+      mockRedisService.setCurrentDj.mockResolvedValue(undefined);
+
+      await service.removeDj(roomId, 'mutiny');
+
+      expect(mockRoomDjHistoryRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          removedAt: expect.any(Date),
+          removalReason: 'mutiny',
+        }),
+      );
+      expect(mockRoomMemberRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ role: RoomMemberRole.LISTENER }),
+      );
+      expect(mockRedisService.setCurrentDj).toHaveBeenCalledWith(roomId, null);
+    });
+
+    it('should throw NotFoundException if room does not exist', async () => {
+      const roomId = 'invalid-room';
+
+      mockRoomRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.removeDj(roomId, 'mutiny')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw BadRequestException if no current DJ', async () => {
+      const roomId = 'room-1';
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRedisService.getCurrentDj.mockResolvedValue(null);
+
+      await expect(service.removeDj(roomId, 'mutiny')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+  });
 });

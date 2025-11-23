@@ -485,6 +485,128 @@ export class RoomsService {
   }
 
   /**
+   * Set DJ based on vote results (called by voting system)
+   */
+  async setDjByVote(roomId: string, userId: string): Promise<void> {
+    // Find room
+    const room = await this.roomRepository.findOne({ where: { id: roomId } });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    // Verify the new DJ is a member of the room
+    const djMember = await this.roomMemberRepository.findOne({
+      where: { roomId: room.id, userId },
+    });
+
+    if (!djMember) {
+      throw new BadRequestException('User is not a member of this room');
+    }
+
+    // Get current DJ from Redis
+    const currentDjId = await this.redisService.getCurrentDj(room.id);
+
+    // If there's a current DJ, end their session
+    if (currentDjId && currentDjId !== userId) {
+      const currentDjHistory = await this.roomDjHistoryRepository.findOne({
+        where: { roomId: room.id, userId: currentDjId, removedAt: IsNull() },
+        order: { becameDjAt: 'DESC' },
+      });
+
+      if (currentDjHistory) {
+        currentDjHistory.removedAt = new Date();
+        currentDjHistory.removalReason = RemovalReason.VOTE;
+        await this.roomDjHistoryRepository.save(currentDjHistory);
+      }
+
+      // Update old DJ's role
+      const oldDjMember = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: currentDjId },
+      });
+      if (oldDjMember && oldDjMember.role === RoomMemberRole.DJ) {
+        oldDjMember.role = RoomMemberRole.LISTENER;
+        await this.roomMemberRepository.save(oldDjMember);
+      }
+    }
+
+    // Set new DJ in Redis
+    await this.redisService.setCurrentDj(room.id, userId);
+
+    // Update new DJ's role
+    djMember.role = RoomMemberRole.DJ;
+    await this.roomMemberRepository.save(djMember);
+
+    // Create DJ history entry
+    const djHistory = this.roomDjHistoryRepository.create({
+      roomId: room.id,
+      userId,
+      removedAt: null,
+      removalReason: null,
+    });
+    await this.roomDjHistoryRepository.save(djHistory);
+
+    // Broadcast dj:changed event via WebSocket
+    if (this.roomGateway?.server) {
+      this.roomGateway.server.to(`room:${room.id}`).emit('dj:changed', {
+        roomId: room.id,
+        djId: userId,
+        username: djMember.user?.username || '',
+        displayName: djMember.user?.displayName || '',
+      });
+    }
+  }
+
+  /**
+   * Remove current DJ with specified reason
+   */
+  async removeDj(roomId: string, reason: RemovalReason): Promise<void> {
+    // Find room
+    const room = await this.roomRepository.findOne({ where: { id: roomId } });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    // Get current DJ from Redis
+    const currentDjId = await this.redisService.getCurrentDj(room.id);
+
+    if (!currentDjId) {
+      throw new BadRequestException('No current DJ to remove');
+    }
+
+    // End current DJ's session
+    const currentDjHistory = await this.roomDjHistoryRepository.findOne({
+      where: { roomId: room.id, userId: currentDjId, removedAt: IsNull() },
+      order: { becameDjAt: 'DESC' },
+    });
+
+    if (currentDjHistory) {
+      currentDjHistory.removedAt = new Date();
+      currentDjHistory.removalReason = reason;
+      await this.roomDjHistoryRepository.save(currentDjHistory);
+    }
+
+    // Update DJ's role to listener
+    const djMember = await this.roomMemberRepository.findOne({
+      where: { roomId: room.id, userId: currentDjId },
+    });
+    if (djMember && djMember.role === RoomMemberRole.DJ) {
+      djMember.role = RoomMemberRole.LISTENER;
+      await this.roomMemberRepository.save(djMember);
+    }
+
+    // Remove DJ from Redis
+    await this.redisService.setCurrentDj(room.id, null);
+
+    // Broadcast dj:removed event via WebSocket
+    if (this.roomGateway?.server) {
+      this.roomGateway.server.to(`room:${room.id}`).emit('dj:removed', {
+        roomId: room.id,
+        reason,
+      });
+    }
+  }
+
+  /**
    * Helper method to map Room entity to RoomDetailsDto
    */
   private mapRoomToDetailsDto(room: Room, includeMembers: boolean = false): RoomDetailsDto {

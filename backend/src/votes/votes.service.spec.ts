@@ -38,6 +38,7 @@ describe('VotesService', () => {
     hget: jest.fn(),
     hgetall: jest.fn(),
     hincrby: jest.fn(),
+    hexists: jest.fn(),
     expire: jest.fn(),
     del: jest.fn(),
     setex: jest.fn(),
@@ -107,6 +108,7 @@ describe('VotesService', () => {
       });
 
       mockRoomMemberRepository.count.mockResolvedValue(5);
+      mockRedisClient.get.mockResolvedValue(null); // No active vote
 
       jest.spyOn(service as any, 'generateVoteSessionId').mockReturnValue(voteSessionId);
 
@@ -116,6 +118,27 @@ describe('VotesService', () => {
       expect(result.voteType).toBe(VoteType.DJ_ELECTION);
       expect(result.totalVoters).toBe(5);
       expect(mockRedisClient.hset).toHaveBeenCalled();
+      expect(mockRedisClient.setex).toHaveBeenCalledWith(
+        `room:${roomId}:active_vote`,
+        300,
+        voteSessionId,
+      );
+    });
+
+    it('should prevent concurrent votes in the same room', async () => {
+      const roomId = uuidv4();
+
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: roomId,
+        roomCode: 'ABC123',
+        settings: { mutinyThreshold: 0.51 },
+      });
+
+      mockRedisClient.get.mockResolvedValue('existing-vote-id'); // Active vote exists
+
+      await expect(service.startDjElection(roomId)).rejects.toThrow(
+        'Another vote is already in progress in this room',
+      );
     });
   });
 
@@ -127,10 +150,12 @@ describe('VotesService', () => {
       const voteSessionId = uuidv4();
 
       mockRedisClient.hget.mockResolvedValue(null); // User hasn't voted yet
+      mockRedisClient.hexists.mockResolvedValue(0); // First vote for this candidate
       mockRedisClient.hgetall.mockResolvedValue({
         voteType: VoteType.DJ_ELECTION,
         roomId,
         totalVoters: '5',
+        isComplete: 'false',
       });
 
       mockVoteRepository.create.mockReturnValue({});
@@ -144,6 +169,7 @@ describe('VotesService', () => {
       expect(voteRepository.save).toHaveBeenCalled();
       expect(mockRedisClient.hset).toHaveBeenCalled();
       expect(mockRedisClient.hincrby).toHaveBeenCalled();
+      expect(mockRedisClient.hexists).toHaveBeenCalled();
     });
 
     it('should not allow voting twice', async () => {
@@ -178,6 +204,7 @@ describe('VotesService', () => {
         voteType: VoteType.DJ_ELECTION,
         roomId: uuidv4(),
         totalVoters: '5',
+        isComplete: 'false',
         [`vote_count:${userId1}`]: '3',
         [`vote_count:${userId2}`]: '2',
       });
@@ -187,6 +214,85 @@ describe('VotesService', () => {
       expect(results.voteType).toBe(VoteType.DJ_ELECTION);
       expect(results.voteCounts[userId1]).toBe(3);
       expect(results.voteCounts[userId2]).toBe(2);
+    });
+
+    it('should determine winner with most votes', async () => {
+      const voteSessionId = uuidv4();
+      const userId1 = uuidv4();
+      const userId2 = uuidv4();
+
+      mockRedisClient.hgetall.mockResolvedValue({
+        voteType: VoteType.DJ_ELECTION,
+        roomId: uuidv4(),
+        totalVoters: '5',
+        isComplete: 'true',
+        [`vote_count:${userId1}`]: '3',
+        [`vote_count:${userId2}`]: '2',
+      });
+
+      const results = await service.getVoteResults(voteSessionId);
+
+      expect(results.winner).toBe(userId1);
+    });
+
+    it('should break ties by selecting candidate who received votes first', async () => {
+      const voteSessionId = uuidv4();
+      const userId1 = uuidv4();
+      const userId2 = uuidv4();
+      const userId3 = uuidv4();
+
+      mockRedisClient.hgetall.mockResolvedValue({
+        voteType: VoteType.DJ_ELECTION,
+        roomId: uuidv4(),
+        totalVoters: '6',
+        isComplete: 'true',
+        [`vote_count:${userId1}`]: '2',
+        [`vote_count:${userId2}`]: '2',
+        [`vote_count:${userId3}`]: '2',
+        [`first_vote:${userId1}`]: '1000',
+        [`first_vote:${userId2}`]: '500',  // Earliest
+        [`first_vote:${userId3}`]: '1500',
+      });
+
+      const results = await service.getVoteResults(voteSessionId);
+
+      expect(results.winner).toBe(userId2); // userId2 received votes first
+    });
+  });
+
+  describe('startMutiny', () => {
+    it('should prevent concurrent votes in the same room', async () => {
+      const roomId = uuidv4();
+
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: roomId,
+        roomCode: 'ABC123',
+        settings: { mutinyThreshold: 0.51 },
+      });
+
+      mockRedisClient.get.mockResolvedValueOnce('existing-vote-id'); // Active vote exists
+
+      await expect(service.startMutiny(roomId, uuidv4())).rejects.toThrow(
+        'Another vote is already in progress in this room',
+      );
+    });
+  });
+
+  describe('completeVote', () => {
+    it('should clean up active vote key after completion', async () => {
+      const voteSessionId = uuidv4();
+      const roomId = uuidv4();
+
+      mockRedisClient.hgetall.mockResolvedValue({
+        voteType: VoteType.DJ_ELECTION,
+        roomId,
+        totalVoters: '5',
+        isComplete: 'false',
+      });
+
+      await service.completeVote(voteSessionId);
+
+      expect(mockRedisClient.del).toHaveBeenCalledWith(`room:${roomId}:active_vote`);
     });
   });
 });

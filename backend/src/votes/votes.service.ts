@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Vote, VoteType } from '../entities/vote.entity';
 import { Room } from '../entities/room.entity';
 import { RoomMember } from '../entities/room-member.entity';
-import { RoomDjHistory } from '../entities/room-dj-history.entity';
+import { RoomDjHistory, RemovalReason } from '../entities/room-dj-history.entity';
 import { RedisService } from '../redis/redis.service';
 import { RoomsService } from '../rooms/rooms.service';
 import {
@@ -55,12 +55,23 @@ export class VotesService {
       throw new NotFoundException('Room not found');
     }
 
+    const redis = this.redisService.getClient();
+
+    // Check for concurrent vote prevention
+    const activeVoteKey = `room:${roomId}:active_vote`;
+    const activeVote = await redis.get(activeVoteKey);
+    if (activeVote) {
+      throw new ConflictException('Another vote is already in progress in this room');
+    }
+
     const totalVoters = await this.roomMemberRepository.count({
       where: { roomId },
     });
 
     const voteSessionId = this.generateVoteSessionId();
-    const redis = this.redisService.getClient();
+
+    // Store active vote session ID
+    await redis.setex(activeVoteKey, this.VOTE_EXPIRY_SECONDS, voteSessionId);
 
     // Store vote session metadata in Redis
     const voteKey = `vote:${voteSessionId}`;
@@ -90,8 +101,16 @@ export class VotesService {
       throw new NotFoundException('Room not found');
     }
 
-    // Check mutiny cooldown
     const redis = this.redisService.getClient();
+
+    // Check for concurrent vote prevention
+    const activeVoteKey = `room:${roomId}:active_vote`;
+    const activeVote = await redis.get(activeVoteKey);
+    if (activeVote) {
+      throw new ConflictException('Another vote is already in progress in this room');
+    }
+
+    // Check mutiny cooldown
     const cooldownKey = `room:${roomId}:mutiny_cooldown`;
     const cooldown = await redis.get(cooldownKey);
     if (cooldown) {
@@ -103,6 +122,9 @@ export class VotesService {
     });
 
     const voteSessionId = this.generateVoteSessionId();
+
+    // Store active vote session ID
+    await redis.setex(activeVoteKey, this.VOTE_EXPIRY_SECONDS, voteSessionId);
 
     // Store vote session metadata
     const voteKey = `vote:${voteSessionId}`;
@@ -176,6 +198,14 @@ export class VotesService {
       });
       await this.voteRepository.save(vote);
 
+      // Check if this is the first vote for this candidate (for tie-breaking)
+      const firstVoteKey = `first_vote:${targetUserId}`;
+      const hasFirstVote = await redis.hexists(voteKey, firstVoteKey);
+      if (!hasFirstVote) {
+        // Store timestamp when this candidate received their first vote
+        await redis.hset(voteKey, firstVoteKey, Date.now().toString());
+      }
+
       // Update Redis counters atomically
       await redis.hset(voteKey, userVoteKey, targetUserId);
       await redis.hincrby(voteKey, `vote_count:${targetUserId}`, 1);
@@ -221,24 +251,45 @@ export class VotesService {
 
     if (voteType === VoteType.DJ_ELECTION) {
       const voteCounts: VoteCounts = {};
+      const firstVoteTimestamps: { [userId: string]: number } = {};
       let winner: string | undefined;
 
-      // Extract vote counts
+      // Extract vote counts and first vote timestamps
       for (const [key, value] of Object.entries(voteData)) {
         if (key.startsWith('vote_count:')) {
           const userId = key.replace('vote_count:', '');
           voteCounts[userId] = parseInt(value as string, 10);
+        } else if (key.startsWith('first_vote:')) {
+          const userId = key.replace('first_vote:', '');
+          firstVoteTimestamps[userId] = parseInt(value as string, 10);
         }
       }
 
-      // Determine winner (most votes)
+      // Determine winner (most votes, with tie-breaking)
       if (isComplete) {
         let maxVotes = 0;
+        const candidates: string[] = [];
+
+        // Find the maximum vote count
         for (const [userId, count] of Object.entries(voteCounts)) {
           if (count > maxVotes) {
             maxVotes = count;
-            winner = userId;
+            candidates.length = 0; // Clear previous candidates
+            candidates.push(userId);
+          } else if (count === maxVotes) {
+            candidates.push(userId);
           }
+        }
+
+        // If there's a tie, select the candidate who received votes first
+        if (candidates.length > 1) {
+          winner = candidates.reduce((earliest, current) => {
+            const earliestTime = firstVoteTimestamps[earliest] || Infinity;
+            const currentTime = firstVoteTimestamps[current] || Infinity;
+            return currentTime < earliestTime ? current : earliest;
+          });
+        } else if (candidates.length === 1) {
+          winner = candidates[0];
         }
       }
 
@@ -278,19 +329,25 @@ export class VotesService {
     const redis = this.redisService.getClient();
     const voteKey = `vote:${voteSessionId}`;
 
+    // Get vote data before marking complete
+    const voteData = await redis.hgetall(voteKey);
+    const roomId = voteData.roomId;
+
     // Mark as complete
     await redis.hset(voteKey, 'isComplete', 'true');
 
     const results = await this.getVoteResults(voteSessionId);
-    const voteData = await redis.hgetall(voteKey);
-    const roomId = voteData.roomId;
+
+    // Clean up active vote key
+    const activeVoteKey = `room:${roomId}:active_vote`;
+    await redis.del(activeVoteKey);
 
     if (results.voteType === VoteType.DJ_ELECTION && results.winner) {
-      // Set new DJ
-      await this.roomsService.setDj(roomId, results.winner);
+      // Set new DJ using vote-specific method
+      await this.roomsService.setDjByVote(roomId, results.winner);
     } else if (results.voteType === VoteType.MUTINY && results.mutinyPassed) {
       // Remove current DJ
-      await this.roomsService.removeDj(roomId, 'mutiny');
+      await this.roomsService.removeDj(roomId, RemovalReason.MUTINY);
     }
 
     return results;
