@@ -648,6 +648,10 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const voteData = await redis.hgetall(`vote:${voteDto.voteSessionId}`);
       const roomId = voteData.roomId;
 
+      if (!voteData || Object.keys(voteData).length === 0) {
+        throw new WsException('Vote session not found or expired');
+      }
+
       if (!roomId) {
         throw new WsException('Vote session not found or expired');
       }
@@ -668,11 +672,20 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Broadcast updated results
       this.server.to(`room:${room.roomCode}`).emit('vote:results-updated', updatedResults);
 
-      // Check if everyone voted or threshold reached
-      const totalVotes = (updatedResults.mutinyVotes?.yes || 0) + (updatedResults.mutinyVotes?.no || 0);
-      const yesPercentage = totalVotes > 0 ? (updatedResults.mutinyVotes?.yes || 0) / totalVotes : 0;
+      // Check if everyone voted or outcome is mathematically guaranteed
+      const yesVotes = updatedResults.mutinyVotes?.yes || 0;
+      const noVotes = updatedResults.mutinyVotes?.no || 0;
+      const totalVotes = yesVotes + noVotes;
+      const remainingVoters = updatedResults.totalVoters - totalVotes;
 
-      if (totalVotes > 0 && (totalVotes >= updatedResults.totalVoters || yesPercentage >= (updatedResults.threshold || 0.51))) {
+      // Guaranteed pass: even if all remaining vote NO, yes percentage still >= threshold
+      const guaranteedPass = yesVotes / updatedResults.totalVoters >= (updatedResults.threshold || 0.51);
+
+      // Guaranteed fail: even if all remaining vote YES, yes percentage still < threshold
+      const maxPossibleYes = yesVotes + remainingVoters;
+      const guaranteedFail = maxPossibleYes / updatedResults.totalVoters < (updatedResults.threshold || 0.51);
+
+      if (totalVotes >= updatedResults.totalVoters || guaranteedPass || guaranteedFail) {
         // Complete the vote
         const finalResults = await this.votesService.completeVote(voteDto.voteSessionId);
         this.server.to(`room:${room.roomCode}`).emit('vote:complete', finalResults);

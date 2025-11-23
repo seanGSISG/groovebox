@@ -1341,5 +1341,164 @@ describe('RoomGateway', () => {
         'No DJ to mutiny against',
       );
     });
+
+    it('should NOT complete vote early when outcome is not guaranteed (3 YES, 2 NO, 5 remaining)', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const voteDto: VoteOnMutinyDto = {
+        voteSessionId: 'mutiny1',
+        voteValue: true,
+      };
+
+      // Mock Redis hgetall to return vote session data
+      mockRedisClient.hgetall = jest.fn().mockResolvedValue({
+        roomId: 'room1',
+        voteType: VoteType.MUTINY,
+      });
+
+      // Mock room lookup
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: 'room1',
+        roomCode: 'ABC123',
+        settings: { djCooldownMinutes: 5 },
+      });
+
+      // 10 total voters, 3 YES, 2 NO (60% yes out of 5 votes)
+      // Remaining 5 voters could change outcome
+      mockVotesService.castVote.mockResolvedValue({
+        voteSessionId: 'mutiny1',
+        voteType: VoteType.MUTINY,
+        isComplete: false,
+        totalVoters: 10,
+        mutinyVotes: { yes: 3, no: 2 },
+        threshold: 0.51,
+      });
+
+      await gateway.handleVoteOnMutiny(mockClient, voteDto);
+
+      // Should NOT complete vote
+      expect(mockVotesService.completeVote).not.toHaveBeenCalled();
+      expect(mockServer.emit).toHaveBeenCalledWith('vote:results-updated', expect.any(Object));
+      expect(mockServer.emit).not.toHaveBeenCalledWith('vote:complete', expect.any(Object));
+    });
+
+    it('should complete vote early when pass is guaranteed (6 YES, 0 NO out of 10)', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const voteDto: VoteOnMutinyDto = {
+        voteSessionId: 'mutiny1',
+        voteValue: true,
+      };
+
+      mockRedisClient.hgetall = jest.fn().mockResolvedValue({
+        roomId: 'room1',
+        voteType: VoteType.MUTINY,
+      });
+
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: 'room1',
+        roomCode: 'ABC123',
+        settings: { djCooldownMinutes: 5 },
+      });
+
+      mockRoomsService.getCurrentDj.mockResolvedValue({
+        userId: 'dj1',
+        roomId: 'room1',
+      });
+
+      // 10 total voters, 6 YES, 0 NO (60% of total voters)
+      // Even if remaining 4 vote NO, yes percentage = 6/10 = 60% >= 51%
+      mockVotesService.castVote.mockResolvedValue({
+        voteSessionId: 'mutiny1',
+        voteType: VoteType.MUTINY,
+        isComplete: false,
+        totalVoters: 10,
+        mutinyVotes: { yes: 6, no: 0 },
+        threshold: 0.51,
+      });
+
+      mockVotesService.completeVote.mockResolvedValue({
+        voteSessionId: 'mutiny1',
+        voteType: VoteType.MUTINY,
+        isComplete: true,
+        totalVoters: 10,
+        mutinyVotes: { yes: 6, no: 0 },
+        threshold: 0.51,
+        mutinyPassed: true,
+      });
+
+      await gateway.handleVoteOnMutiny(mockClient, voteDto);
+
+      // Should complete vote because pass is guaranteed
+      expect(mockVotesService.completeVote).toHaveBeenCalledWith('mutiny1');
+      expect(mockServer.emit).toHaveBeenCalledWith('vote:complete', expect.any(Object));
+      expect(mockServer.emit).toHaveBeenCalledWith('mutiny:success', expect.any(Object));
+    });
+
+    it('should complete vote early when fail is guaranteed (1 YES, 4 NO out of 10)', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const voteDto: VoteOnMutinyDto = {
+        voteSessionId: 'mutiny1',
+        voteValue: false,
+      };
+
+      mockRedisClient.hgetall = jest.fn().mockResolvedValue({
+        roomId: 'room1',
+        voteType: VoteType.MUTINY,
+      });
+
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: 'room1',
+        roomCode: 'ABC123',
+        settings: { djCooldownMinutes: 5 },
+      });
+
+      // 10 total voters, 1 YES, 4 NO
+      // Even if remaining 5 vote YES, max yes = 6/10 = 60%... wait that would pass
+      // Let me recalculate: for 51% threshold with 10 voters, need at least 5.1 votes
+      // So need at least 6 YES votes to pass
+      // If 1 YES, 4 NO, remaining 5, max yes = 1 + 5 = 6 (exactly 60%, which >= 51%)
+      // So this would NOT be guaranteed fail. Let me adjust the numbers.
+      // For guaranteed fail with 51% threshold and 10 voters:
+      // If 1 YES, 5 NO, remaining 4, max yes = 1 + 4 = 5/10 = 50% < 51% - guaranteed fail
+      mockVotesService.castVote.mockResolvedValue({
+        voteSessionId: 'mutiny1',
+        voteType: VoteType.MUTINY,
+        isComplete: false,
+        totalVoters: 10,
+        mutinyVotes: { yes: 1, no: 5 },
+        threshold: 0.51,
+      });
+
+      mockVotesService.completeVote.mockResolvedValue({
+        voteSessionId: 'mutiny1',
+        voteType: VoteType.MUTINY,
+        isComplete: true,
+        totalVoters: 10,
+        mutinyVotes: { yes: 1, no: 5 },
+        threshold: 0.51,
+        mutinyPassed: false,
+      });
+
+      await gateway.handleVoteOnMutiny(mockClient, voteDto);
+
+      // Should complete vote because fail is guaranteed
+      expect(mockVotesService.completeVote).toHaveBeenCalledWith('mutiny1');
+      expect(mockServer.emit).toHaveBeenCalledWith('vote:complete', expect.any(Object));
+      expect(mockServer.emit).toHaveBeenCalledWith('mutiny:failed', expect.any(Object));
+    });
+
+    it('should throw WsException when vote session is empty object', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const voteDto: VoteOnMutinyDto = {
+        voteSessionId: 'mutiny1',
+        voteValue: true,
+      };
+
+      // Mock Redis hgetall to return empty object (vote session not found)
+      mockRedisClient.hgetall = jest.fn().mockResolvedValue({});
+
+      await expect(gateway.handleVoteOnMutiny(mockClient, voteDto)).rejects.toThrow(
+        'Vote session not found or expired',
+      );
+    });
   });
 });
