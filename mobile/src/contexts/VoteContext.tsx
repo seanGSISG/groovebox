@@ -5,11 +5,13 @@ import { VoteSession, VoteType, RoomMember, MutinySuccessEvent, MutinyFailedEven
 interface VoteContextType {
   currentVote: VoteSession | null;
   hasVoted: boolean;
+  lastError: string | null;
   startElection: (roomCode: string) => boolean;
   voteForDj: (voteSessionId: string, targetUserId: string) => boolean;
   startMutiny: (roomCode: string) => boolean;
   voteOnMutiny: (voteSessionId: string, voteValue: boolean) => boolean;
   randomizeDj: (roomCode: string) => boolean;
+  clearError: () => void;
 }
 
 const VoteContext = createContext<VoteContextType | undefined>(undefined);
@@ -23,6 +25,7 @@ interface VoteProviderProps {
 export const VoteProvider: React.FC<VoteProviderProps> = ({ children, socket, userId }) => {
   const [currentVote, setCurrentVote] = useState<VoteSession | null>(null);
   const [hasVoted, setHasVoted] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -63,6 +66,12 @@ export const VoteProvider: React.FC<VoteProviderProps> = ({ children, socket, us
       setHasVoted(false);
     });
 
+    socket.on('exception', (error: any) => {
+      console.error('[Vote] Socket exception:', error);
+      const errorMessage = error?.message || 'An error occurred';
+      setLastError(errorMessage);
+    });
+
     return () => {
       socket.off('vote:election-started');
       socket.off('vote:mutiny-started');
@@ -70,6 +79,7 @@ export const VoteProvider: React.FC<VoteProviderProps> = ({ children, socket, us
       socket.off('vote:complete');
       socket.off('mutiny:success');
       socket.off('mutiny:failed');
+      socket.off('exception');
     };
   }, [socket]);
 
@@ -147,16 +157,22 @@ export const VoteProvider: React.FC<VoteProviderProps> = ({ children, socket, us
     return true;
   };
 
+  const clearError = (): void => {
+    setLastError(null);
+  };
+
   return (
     <VoteContext.Provider
       value={{
         currentVote,
         hasVoted,
+        lastError,
         startElection,
         voteForDj,
         startMutiny,
         voteOnMutiny,
         randomizeDj,
+        clearError,
       }}
     >
       {children}

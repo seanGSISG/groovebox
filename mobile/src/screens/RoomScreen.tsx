@@ -32,7 +32,7 @@ const RoomContent: React.FC<{
   socket: any;
   user: any;
 }> = ({ roomCode, navigation, socket, user }) => {
-  const { currentVote, startElection } = useVote();
+  const { currentVote, startElection, randomizeDj, lastError, clearError } = useVote();
   const { toast, showToast, hideToast } = useToast();
   const syncManagerRef = useRef<ClockSyncManager | null>(null);
   const audioPlayerRef = useRef<SyncedAudioPlayer | null>(null);
@@ -46,6 +46,7 @@ const RoomContent: React.FC<{
   const [showMutiny, setShowMutiny] = useState(false);
   const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
   const [currentDjId, setCurrentDjId] = useState<string | null>(null);
+  const [ownerId, setOwnerId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -81,6 +82,9 @@ const RoomContent: React.FC<{
 
     socket.on('room:state', (state) => {
       console.log('[Room] Room state:', state);
+      if (state.ownerId) {
+        setOwnerId(state.ownerId);
+      }
       if (state.playback?.playing) {
         audioPlayerRef.current?.joinMidSong(state.playback);
         setIsPlaying(true);
@@ -219,6 +223,14 @@ const RoomContent: React.FC<{
     }
   }, [currentVote, showMutiny]);
 
+  // Handle vote errors from backend
+  useEffect(() => {
+    if (lastError) {
+      Alert.alert('Error', lastError);
+      clearError();
+    }
+  }, [lastError, clearError]);
+
   const sendMessage = () => {
     if (!inputMessage.trim() || !socket) return;
 
@@ -251,12 +263,21 @@ const RoomContent: React.FC<{
     }
   };
 
+  const handleRandomizeDj = () => {
+    const success = randomizeDj(roomCode);
+    if (!success) {
+      Alert.alert('Error', 'Failed to randomize DJ. Please try again.');
+    }
+  };
+
   const renderMessage = ({ item }: { item: ChatMessage }) => (
     <View style={styles.messageContainer}>
       <Text style={styles.messageUsername}>{item.username}:</Text>
       <Text style={styles.messageText}>{item.message}</Text>
     </View>
   );
+
+  const isRoomOwner = ownerId === user?.id;
 
   return (
     <View style={styles.container}>
@@ -297,6 +318,14 @@ const RoomContent: React.FC<{
         >
           <Text style={styles.controlButtonText}>Call Mutiny</Text>
         </TouchableOpacity>
+        {isRoomOwner && (
+          <TouchableOpacity
+            style={[styles.controlButton, styles.randomizeButton]}
+            onPress={handleRandomizeDj}
+          >
+            <Text style={styles.controlButtonText}>Randomize DJ</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Chat */}
@@ -406,6 +435,7 @@ const styles = StyleSheet.create({
   },
   controls: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     padding: 16,
     gap: 12,
     backgroundColor: '#fff',
@@ -421,6 +451,9 @@ const styles = StyleSheet.create({
   },
   mutinyButton: {
     backgroundColor: '#FF3B30',
+  },
+  randomizeButton: {
+    backgroundColor: '#FF9500',
   },
   controlButtonText: {
     color: '#fff',

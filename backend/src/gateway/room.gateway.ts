@@ -204,6 +204,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       const roomState: RoomStateDto = {
         roomId: room.id,
+        ownerId: room.ownerId,
         members: [], // TODO: fetch from room members
         currentDjId,
         playback: playbackState,
@@ -738,12 +739,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const userId = client.data.userId;
       const room = await this.roomsService.getRoomByCode(roomCode);
 
-      // Verify user is owner or current DJ
+      // Verify user is room owner
       if (room.ownerId !== userId) {
-        const currentDj = await this.roomsService.getCurrentDj(room.id);
-        if (!currentDj || currentDj.userId !== userId) {
-          throw new WsException('Only room owner or current DJ can randomize DJ');
-        }
+        throw new WsException('Only room owner can randomize DJ');
       }
 
       const djHistory = await this.roomsService.randomizeDj(room.id);

@@ -1,5 +1,6 @@
 export class RoomStateDto {
   roomId: string;
+  ownerId: string | null;
   members: Array<{ userId: string; username: string }>;
   currentDjId: string | null;
   playback: {
