@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,9 @@ import { RoomMember, VoteType } from '../types/vote.types';
 import { useAuth } from '../contexts/AuthContext';
 import { Toast } from '../components/Toast';
 import { useToast } from '../hooks/useToast';
+import { YouTubePlayerView } from '../components/YouTubePlayerView';
+import { YouTubePlayer } from '../services/YouTubePlayer';
+import { YoutubeIframeRef } from 'react-native-youtube-iframe';
 
 interface ChatMessage {
   id: string;
@@ -36,6 +39,8 @@ const RoomContent: React.FC<{
   const { toast, showToast, hideToast } = useToast();
   const syncManagerRef = useRef<ClockSyncManager | null>(null);
   const audioPlayerRef = useRef<SyncedAudioPlayer | null>(null);
+  const youtubePlayerRef = useRef<YouTubePlayer | null>(null);
+  const pendingPlaybackRef = useRef<any>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -47,6 +52,7 @@ const RoomContent: React.FC<{
   const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
   const [currentDjId, setCurrentDjId] = useState<string | null>(null);
   const [ownerId, setOwnerId] = useState<string | null>(null);
+  const [currentVideoId, setCurrentVideoId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -54,6 +60,7 @@ const RoomContent: React.FC<{
     // Initialize sync services
     syncManagerRef.current = new ClockSyncManager(socket);
     audioPlayerRef.current = new SyncedAudioPlayer(syncManagerRef.current);
+    youtubePlayerRef.current = new YouTubePlayer(syncManagerRef.current);
 
     // Join room
     socket.emit('room:join', { roomCode });
@@ -62,25 +69,81 @@ const RoomContent: React.FC<{
     syncManagerRef.current.startSync(false);
 
     // Listen for playback events
-    socket.on('playback:start', (event) => {
+    socket.on('playback:start', async (event: any) => {
       console.log('[Room] Playback start event:', event);
-      audioPlayerRef.current?.handlePlaybackStart(event);
-      setIsPlaying(true);
-      syncManagerRef.current?.startSync(true); // Increase sync frequency
+
+      if (event.youtubeVideoId && youtubePlayerRef.current) {
+        // YouTube playback - stop audio player first
+        audioPlayerRef.current?.handlePlaybackStop();
+        setCurrentVideoId(event.youtubeVideoId);
+        setIsPlaying(true);
+
+        // Store event for when player is ready
+        pendingPlaybackRef.current = event;
+
+        // If player ref is already set, start playback immediately
+        if (youtubePlayerRef.current.hasPlayerRef()) {
+          try {
+            await youtubePlayerRef.current.handlePlaybackStart(event);
+            pendingPlaybackRef.current = null;
+            syncManagerRef.current?.startSync(true); // Increase sync frequency
+          } catch (error) {
+            console.error('[Room] YouTube playback error:', error);
+            Alert.alert('Playback Error', 'Failed to start video playback');
+          }
+        }
+      } else {
+        // Regular audio playback - stop YouTube player first
+        if (youtubePlayerRef.current && currentVideoId) {
+          await youtubePlayerRef.current.handlePlaybackStop();
+          setCurrentVideoId(null);
+        }
+        audioPlayerRef.current?.handlePlaybackStart(event);
+        setIsPlaying(true);
+        syncManagerRef.current?.startSync(true);
+      }
     });
 
-    socket.on('playback:pause', () => {
-      audioPlayerRef.current?.handlePlaybackPause();
-      setIsPlaying(false);
-      syncManagerRef.current?.startSync(false);
+    socket.on('playback:pause', async () => {
+      try {
+        if (youtubePlayerRef.current && currentVideoId) {
+          // YouTube playback pause
+          await youtubePlayerRef.current.handlePlaybackPause();
+          setIsPlaying(false);
+          syncManagerRef.current?.startSync(false);
+        } else {
+          // Regular audio pause
+          audioPlayerRef.current?.handlePlaybackPause();
+          setIsPlaying(false);
+          syncManagerRef.current?.startSync(false);
+        }
+      } catch (error) {
+        console.error('[Room] Pause error:', error);
+        Alert.alert('Playback Error', 'Failed to pause playback');
+      }
     });
 
-    socket.on('playback:stop', () => {
-      audioPlayerRef.current?.handlePlaybackStop();
-      setIsPlaying(false);
+    socket.on('playback:stop', async () => {
+      try {
+        if (youtubePlayerRef.current && currentVideoId) {
+          // YouTube playback stop
+          await youtubePlayerRef.current.handlePlaybackStop();
+          setIsPlaying(false);
+          setCurrentVideoId(null);
+          syncManagerRef.current?.startSync(false);
+        } else {
+          // Regular audio stop
+          audioPlayerRef.current?.handlePlaybackStop();
+          setIsPlaying(false);
+          syncManagerRef.current?.startSync(false);
+        }
+      } catch (error) {
+        console.error('[Room] Stop error:', error);
+        Alert.alert('Playback Error', 'Failed to stop playback');
+      }
     });
 
-    socket.on('room:state', (state) => {
+    socket.on('room:state', (state: any) => {
       console.log('[Room] Room state:', state);
       if (state.ownerId) {
         setOwnerId(state.ownerId);
@@ -91,7 +154,7 @@ const RoomContent: React.FC<{
       }
     });
 
-    socket.on('chat:message', (data) => {
+    socket.on('chat:message', (data: any) => {
       setMessages((prev) => [
         ...prev,
         {
@@ -104,12 +167,17 @@ const RoomContent: React.FC<{
     });
 
     // Listen for DJ changes
-    socket.on('dj:changed', (data) => {
+    socket.on('dj:changed', (data: any) => {
       console.log('[Room] DJ changed:', data);
       setCurrentDjId(data.newDjId);
+      const newDj = roomMembersRef.current.find((m) => m.userId === data.newDjId);
+      showToast({
+        message: `${newDj?.displayName || 'Someone'} is now the DJ!`,
+        type: 'success',
+      });
     });
 
-    socket.on('room:members-changed', (data) => {
+    socket.on('room:members-changed', (data: any) => {
       console.log('[Room] Members changed:', data);
       setRoomMembers(data.members || []);
     });
@@ -127,6 +195,7 @@ const RoomContent: React.FC<{
       syncManagerRef.current?.stopSync();
       syncManagerRef.current?.destroy();
       audioPlayerRef.current?.destroy();
+      youtubePlayerRef.current?.destroy();
       socket.emit('room:leave');
       socket.off('playback:start');
       socket.off('playback:pause');
@@ -136,7 +205,7 @@ const RoomContent: React.FC<{
       socket.off('dj:changed');
       socket.off('room:members-changed');
     };
-  }, [socket, roomCode]);
+  }, [socket, roomCode, showToast]);
 
   // Use ref to access latest roomMembers without re-registering listeners
   const roomMembersRef = useRef(roomMembers);
@@ -146,21 +215,21 @@ const RoomContent: React.FC<{
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('vote:election-started', (data) => {
+    socket.on('vote:election-started', (data: any) => {
       showToast({
         message: 'DJ election started! Vote for your favorite.',
         type: 'info',
       });
     });
 
-    socket.on('vote:mutiny-started', (data) => {
+    socket.on('vote:mutiny-started', (data: any) => {
       showToast({
         message: 'Mutiny vote started!',
         type: 'warning',
       });
     });
 
-    socket.on('vote:complete', (data) => {
+    socket.on('vote:complete', (data: any) => {
       if (data.winner) {
         const winner = roomMembersRef.current.find((m) => m.userId === data.winner);
         showToast({
@@ -170,25 +239,17 @@ const RoomContent: React.FC<{
       }
     });
 
-    socket.on('mutiny:success', (data) => {
+    socket.on('mutiny:success', (data: any) => {
       showToast({
         message: 'Mutiny succeeded! DJ has been removed.',
         type: 'success',
       });
     });
 
-    socket.on('mutiny:failed', (data) => {
+    socket.on('mutiny:failed', (data: any) => {
       showToast({
         message: 'Mutiny failed. DJ remains.',
         type: 'info',
-      });
-    });
-
-    socket.on('dj:changed', (data) => {
-      const newDj = roomMembersRef.current.find((m) => m.userId === data.newDjId);
-      showToast({
-        message: `${newDj?.displayName || 'Someone'} is now the DJ!`,
-        type: 'success',
       });
     });
 
@@ -198,7 +259,6 @@ const RoomContent: React.FC<{
       socket.off('vote:complete');
       socket.off('mutiny:success');
       socket.off('mutiny:failed');
-      socket.off('dj:changed');
     };
   }, [socket, showToast]);
 
@@ -230,6 +290,36 @@ const RoomContent: React.FC<{
       clearError();
     }
   }, [lastError, clearError]);
+
+  // YouTube player callbacks
+  const handlePlayerReady = useCallback((playerRef: YoutubeIframeRef) => {
+    if (youtubePlayerRef.current) {
+      youtubePlayerRef.current.setPlayerRef(playerRef);
+
+      // If there's a pending playback event, start it now
+      if (pendingPlaybackRef.current) {
+        const event = pendingPlaybackRef.current;
+        pendingPlaybackRef.current = null;
+
+        youtubePlayerRef.current.handlePlaybackStart(event).then(() => {
+          syncManagerRef.current?.startSync(true);
+        }).catch(error => {
+          console.error('[Room] YouTube playback error:', error);
+          Alert.alert('Playback Error', 'Failed to start video playback');
+        });
+      }
+    }
+  }, []);
+
+  const handleVideoEnd = useCallback(() => {
+    if (!socket) return;
+    console.log('[Room] Video ended, notifying server');
+    socket.emit('playback:stop');
+  }, [socket]);
+
+  const handleVideoError = useCallback((error: string) => {
+    Alert.alert('YouTube Error', `Video playback failed: ${error}`);
+  }, []);
 
   const sendMessage = () => {
     if (!inputMessage.trim() || !socket) return;
@@ -287,6 +377,15 @@ const RoomContent: React.FC<{
           <Text style={styles.leaveButton}>Leave</Text>
         </TouchableOpacity>
       </View>
+
+      {/* YouTube Player */}
+      <YouTubePlayerView
+        videoId={currentVideoId}
+        playing={isPlaying}
+        onReady={handlePlayerReady}
+        onEnd={handleVideoEnd}
+        onError={handleVideoError}
+      />
 
       {/* Sync Metrics */}
       <View style={styles.syncMetrics}>

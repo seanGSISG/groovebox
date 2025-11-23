@@ -38,6 +38,13 @@ export class YouTubePlayer {
   }
 
   /**
+   * Check if player reference is set
+   */
+  hasPlayerRef(): boolean {
+    return this.playerRef !== null;
+  }
+
+  /**
    * Handle playback start with synchronized timing
    */
   async handlePlaybackStart(event: {
