@@ -484,6 +484,8 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('queue:submit')
   async handleQueueSubmit(
     @ConnectedSocket() client: AuthenticatedSocket,
@@ -513,16 +515,19 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         },
       );
 
-      // Broadcast new submission to all room members
-      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
-      this.server.to(`room:${room.id}`).emit('queue:updated', queueState);
+      // Notify all room members that queue changed - they'll refetch with their own hasVoted
+      this.server.to(`room:${room.id}`).emit('queue:updated');
 
-      return { success: true, submission };
+      // Return the full queue state to the requesting client
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return { success: true, submission, queueState };
     } catch (error) {
       return { error: error.message };
     }
   }
 
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('queue:vote')
   async handleQueueVote(
     @ConnectedSocket() client: AuthenticatedSocket,
@@ -544,16 +549,19 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       await this.queueService.voteForSubmission(payload.submissionId, client.data.userId);
 
-      // Broadcast updated queue to all room members
-      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
-      this.server.to(`room:${room.id}`).emit('queue:updated', queueState);
+      // Notify all room members that queue changed - they'll refetch with their own hasVoted
+      this.server.to(`room:${room.id}`).emit('queue:updated');
 
-      return { success: true };
+      // Return the full queue state to the requesting client
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return { success: true, queueState };
     } catch (error) {
       return { error: error.message };
     }
   }
 
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('queue:unvote')
   async handleQueueUnvote(
     @ConnectedSocket() client: AuthenticatedSocket,
@@ -575,16 +583,19 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       await this.queueService.unvoteSubmission(payload.submissionId, client.data.userId);
 
-      // Broadcast updated queue to all room members
-      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
-      this.server.to(`room:${room.id}`).emit('queue:updated', queueState);
+      // Notify all room members that queue changed - they'll refetch with their own hasVoted
+      this.server.to(`room:${room.id}`).emit('queue:updated');
 
-      return { success: true };
+      // Return the full queue state to the requesting client
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return { success: true, queueState };
     } catch (error) {
       return { error: error.message };
     }
   }
 
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('queue:remove')
   async handleQueueRemove(
     @ConnectedSocket() client: AuthenticatedSocket,
@@ -596,18 +607,29 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return { error: 'Room not found' };
       }
 
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
       await this.queueService.removeSubmission(payload.submissionId, client.data.userId);
 
-      // Broadcast updated queue to all room members
-      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
-      this.server.to(`room:${room.id}`).emit('queue:updated', queueState);
+      // Notify all room members that queue changed - they'll refetch with their own hasVoted
+      this.server.to(`room:${room.id}`).emit('queue:updated');
 
-      return { success: true };
+      // Return the full queue state to the requesting client
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return { success: true, queueState };
     } catch (error) {
       return { error: error.message };
     }
   }
 
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   @SubscribeMessage('queue:get')
   async handleQueueGet(
     @ConnectedSocket() client: AuthenticatedSocket,
