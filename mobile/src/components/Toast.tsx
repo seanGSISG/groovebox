@@ -19,8 +19,10 @@ export const Toast: React.FC<ToastProps> = ({
   const opacity = React.useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    let isCancelled = false;
+
     if (visible) {
-      Animated.sequence([
+      const animation = Animated.sequence([
         Animated.timing(opacity, {
           toValue: 1,
           duration: 300,
@@ -32,11 +34,20 @@ export const Toast: React.FC<ToastProps> = ({
           duration: 300,
           useNativeDriver: true,
         }),
-      ]).start(() => {
-        onHide();
+      ]);
+
+      animation.start(() => {
+        if (!isCancelled) {
+          onHide();
+        }
       });
+
+      return () => {
+        isCancelled = true;
+        animation.stop();
+      };
     }
-  }, [visible, duration, opacity, onHide]);
+  }, [visible, duration, opacity]);
 
   if (!visible) return null;
 

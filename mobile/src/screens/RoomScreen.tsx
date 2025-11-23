@@ -134,6 +134,10 @@ const RoomContent: React.FC<{
     };
   }, [socket, roomCode]);
 
+  // Use ref to access latest roomMembers without re-registering listeners
+  const roomMembersRef = useRef(roomMembers);
+  roomMembersRef.current = roomMembers;
+
   // Toast notifications for vote events
   useEffect(() => {
     if (!socket) return;
@@ -154,7 +158,7 @@ const RoomContent: React.FC<{
 
     socket.on('vote:complete', (data) => {
       if (data.winner) {
-        const winner = roomMembers.find((m) => m.userId === data.winner);
+        const winner = roomMembersRef.current.find((m) => m.userId === data.winner);
         showToast({
           message: `${winner?.displayName || 'Someone'} is the new DJ!`,
           type: 'success',
@@ -177,7 +181,7 @@ const RoomContent: React.FC<{
     });
 
     socket.on('dj:changed', (data) => {
-      const newDj = roomMembers.find((m) => m.userId === data.newDjId);
+      const newDj = roomMembersRef.current.find((m) => m.userId === data.newDjId);
       showToast({
         message: `${newDj?.displayName || 'Someone'} is now the DJ!`,
         type: 'success',
@@ -192,7 +196,7 @@ const RoomContent: React.FC<{
       socket.off('mutiny:failed');
       socket.off('dj:changed');
     };
-  }, [socket, showToast, roomMembers]);
+  }, [socket, showToast]);
 
   // Auto-open modal when election starts
   useEffect(() => {
