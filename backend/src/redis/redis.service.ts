@@ -74,13 +74,32 @@ export class RedisService implements OnModuleDestroy {
     state: 'playing' | 'paused' | 'stopped',
     trackId?: string,
     position?: number,
+    startAtServerTime?: number,
+    trackDuration?: number,
+    syncBuffer?: number,
   ): Promise<void> {
-    await this.client.hmset(`room:${roomId}:state`, {
+    const updateData: Record<string, string> = {
       playbackState: state,
-      ...(trackId && { trackId }),
-      ...(position !== undefined && { position: position.toString() }),
       lastUpdate: Date.now().toString(),
-    });
+    };
+
+    if (trackId !== undefined) {
+      updateData.trackId = trackId;
+    }
+    if (position !== undefined) {
+      updateData.position = position.toString();
+    }
+    if (startAtServerTime !== undefined) {
+      updateData.startAtServerTime = startAtServerTime.toString();
+    }
+    if (trackDuration !== undefined) {
+      updateData.trackDuration = trackDuration.toString();
+    }
+    if (syncBuffer !== undefined) {
+      updateData.syncBuffer = syncBuffer.toString();
+    }
+
+    await this.client.hmset(`room:${roomId}:state`, updateData);
   }
 
   async getPlaybackState(roomId: string): Promise<{
@@ -88,6 +107,9 @@ export class RedisService implements OnModuleDestroy {
     trackId: string | null;
     position: number | null;
     lastUpdate: number | null;
+    startAtServerTime: number | null;
+    trackDuration: number | null;
+    syncBuffer: number | null;
   }> {
     const state = await this.getAllRoomState(roomId);
     return {
@@ -95,6 +117,9 @@ export class RedisService implements OnModuleDestroy {
       trackId: state.trackId || null,
       position: state.position ? parseInt(state.position, 10) : null,
       lastUpdate: state.lastUpdate ? parseInt(state.lastUpdate, 10) : null,
+      startAtServerTime: state.startAtServerTime ? parseInt(state.startAtServerTime, 10) : null,
+      trackDuration: state.trackDuration ? parseInt(state.trackDuration, 10) : null,
+      syncBuffer: state.syncBuffer ? parseInt(state.syncBuffer, 10) : null,
     };
   }
 
@@ -157,5 +182,20 @@ export class RedisService implements OnModuleDestroy {
 
     // Return the maximum RTT
     return Math.max(...rtts);
+  }
+
+  // Helper methods for enhanced playback events
+  async getPlaybackStartTime(roomId: string): Promise<number | null> {
+    const value = await this.getRoomState(roomId, 'startAtServerTime');
+    return value ? parseInt(value, 10) : null;
+  }
+
+  async getTrackDuration(roomId: string): Promise<number | null> {
+    const value = await this.getRoomState(roomId, 'trackDuration');
+    return value ? parseInt(value, 10) : null;
+  }
+
+  async setPlaybackPosition(roomId: string, position: number): Promise<void> {
+    await this.setRoomState(roomId, 'position', position.toString());
   }
 }

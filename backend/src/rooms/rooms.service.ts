@@ -485,6 +485,26 @@ export class RoomsService {
   }
 
   /**
+   * Calculate adaptive sync buffer for playback synchronization
+   * Algorithm: 2x max RTT + 500ms safety margin, clamped between 1000-5000ms
+   */
+  async calculateSyncBuffer(roomId: string): Promise<number> {
+    // Get max RTT from all room members
+    const maxRtt = await this.redisService.getMaxRttForRoom(roomId);
+
+    // If no RTT data available, use default minimum buffer
+    if (maxRtt === null) {
+      return 1000;
+    }
+
+    // Calculate buffer: 2x max RTT + 500ms safety margin
+    const syncBuffer = (maxRtt * 2) + 500;
+
+    // Clamp between 1000ms (min) and 5000ms (max)
+    return Math.min(Math.max(syncBuffer, 1000), 5000);
+  }
+
+  /**
    * Helper method to map Room entity to RoomDetailsDto
    */
   private mapRoomToDetailsDto(room: Room, includeMembers: boolean = false): RoomDetailsDto {

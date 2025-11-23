@@ -36,6 +36,10 @@ export class PlaybackStartDto {
   @IsNumber()
   @Min(0)
   position?: number;
+
+  @IsNumber()
+  @Min(0)
+  trackDuration: number;
 }
 
 export class PlaybackPauseDto {
@@ -90,4 +94,26 @@ export class SyncUpdateDto {
   @Min(0)
   @Max(10000)
   rtt: number;
+}
+
+// Response DTOs for enhanced playback events
+export class PlaybackStartEventDto {
+  roomId: string;
+  trackId: string;
+  position: number;
+  startAtServerTime: number;
+  trackDuration: number;
+  syncBuffer: number;
+  serverTimestamp: number;
+}
+
+export class PlaybackPauseEventDto {
+  roomId: string;
+  position: number;
+  serverTimestamp: number;
+}
+
+export class PlaybackStopEventDto {
+  roomId: string;
+  serverTimestamp: number;
 }

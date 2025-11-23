@@ -8,12 +8,13 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Logger, UseGuards, UsePipes, ValidationPipe, Inject, forwardRef } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Room, RoomMember, User, Message, RoomDjHistory, RoomMemberRole, RemovalReason } from '../entities';
 import { RedisService } from '../redis/redis.service';
+import { RoomsService } from '../rooms/rooms.service';
 import { WsJwtGuard } from './ws-jwt.guard';
 import {
   RoomJoinDto,
@@ -22,6 +23,9 @@ import {
   PlaybackStartDto,
   PlaybackPauseDto,
   PlaybackStopDto,
+  PlaybackStartEventDto,
+  PlaybackPauseEventDto,
+  PlaybackStopEventDto,
 } from './dto/websocket-events.dto';
 import xss from 'xss';
 
@@ -47,6 +51,8 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
+    @Inject(forwardRef(() => RoomsService))
+    private readonly roomsService: RoomsService,
     @InjectRepository(Room)
     private readonly roomRepository: Repository<Room>,
     @InjectRepository(RoomMember)
@@ -271,7 +277,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: PlaybackStartDto,
   ) {
     try {
-      const { roomCode, trackId, position = 0 } = data;
+      const { roomCode, trackId, position = 0, trackDuration } = data;
       const userId = client.data.userId;
 
       // Find room
@@ -286,20 +292,41 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return { error: 'Only the current DJ can start playback' };
       }
 
-      // Update Redis room state
-      await this.redisService.setPlaybackState(room.id, 'playing', trackId, position);
+      // Calculate adaptive sync buffer based on room RTT
+      const syncBuffer = await this.roomsService.calculateSyncBuffer(room.id);
 
-      // Broadcast to all room members
-      const payload = {
+      // Calculate future start time
+      const now = Date.now();
+      const startAtServerTime = now + syncBuffer;
+
+      // Update Redis room state with enhanced playback data
+      await this.redisService.setPlaybackState(
+        room.id,
+        'playing',
+        trackId,
+        position,
+        startAtServerTime,
+        trackDuration,
+        syncBuffer,
+      );
+
+      // Broadcast to all room members with timing metadata
+      const payload: PlaybackStartEventDto = {
         roomId: room.id,
         trackId,
         position,
-        timestamp: Date.now(),
+        startAtServerTime,
+        trackDuration,
+        syncBuffer,
+        serverTimestamp: now,
       };
 
       this.server.to(`room:${room.id}`).emit('playback:start', payload);
 
-      this.logger.log(`Playback started in room ${roomCode} by ${client.data.username}`);
+      this.logger.log(
+        `Playback started in room ${roomCode} by ${client.data.username} ` +
+        `(syncBuffer: ${syncBuffer}ms, startAt: ${startAtServerTime})`,
+      );
 
       return { success: true, ...payload };
     } catch (error) {
@@ -316,7 +343,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: PlaybackPauseDto,
   ) {
     try {
-      const { roomCode, position } = data;
+      const { roomCode, position = 0 } = data;
       const userId = client.data.userId;
 
       // Find room
@@ -331,19 +358,23 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return { error: 'Only the current DJ can pause playback' };
       }
 
-      // Update Redis room state
+      // Update Redis room state with paused position
       await this.redisService.setPlaybackState(room.id, 'paused', undefined, position);
 
-      // Broadcast to all room members
-      const payload = {
+      // Also store the position separately for easy retrieval
+      await this.redisService.setPlaybackPosition(room.id, position);
+
+      // Broadcast to all room members with server timestamp
+      const serverTimestamp = Date.now();
+      const payload: PlaybackPauseEventDto = {
         roomId: room.id,
         position,
-        timestamp: Date.now(),
+        serverTimestamp,
       };
 
       this.server.to(`room:${room.id}`).emit('playback:pause', payload);
 
-      this.logger.log(`Playback paused in room ${roomCode} by ${client.data.username}`);
+      this.logger.log(`Playback paused in room ${roomCode} by ${client.data.username} at position ${position}ms`);
 
       return { success: true, ...payload };
     } catch (error) {
@@ -378,10 +409,11 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Update Redis room state
       await this.redisService.setPlaybackState(room.id, 'stopped');
 
-      // Broadcast to all room members
-      const payload = {
+      // Broadcast to all room members with server timestamp
+      const serverTimestamp = Date.now();
+      const payload: PlaybackStopEventDto = {
         roomId: room.id,
-        timestamp: Date.now(),
+        serverTimestamp,
       };
 
       this.server.to(`room:${room.id}`).emit('playback:stop', payload);

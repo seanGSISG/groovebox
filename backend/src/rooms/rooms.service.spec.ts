@@ -91,6 +91,7 @@ describe('RoomsService', () => {
     setCurrentDj: jest.fn(),
     setPlaybackState: jest.fn(),
     getPlaybackState: jest.fn(),
+    getMaxRttForRoom: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -1003,6 +1004,82 @@ describe('RoomsService', () => {
           removedAt: expect.any(Date),
         }),
       );
+    });
+  });
+
+  describe('calculateSyncBuffer', () => {
+    it('should return minimum buffer (1000ms) when no RTT data available', async () => {
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(null);
+
+      const result = await service.calculateSyncBuffer('room-1');
+
+      expect(result).toBe(1000);
+      expect(mockRedisService.getMaxRttForRoom).toHaveBeenCalledWith('room-1');
+    });
+
+    it('should calculate buffer correctly for low RTT (50ms)', async () => {
+      const maxRtt = 50;
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(maxRtt);
+
+      const result = await service.calculateSyncBuffer('room-1');
+
+      // 2x RTT + 500ms = 100 + 500 = 600ms
+      // Clamped to minimum 1000ms
+      expect(result).toBe(1000);
+    });
+
+    it('should calculate buffer correctly for medium RTT (500ms)', async () => {
+      const maxRtt = 500;
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(maxRtt);
+
+      const result = await service.calculateSyncBuffer('room-1');
+
+      // 2x RTT + 500ms = 1000 + 500 = 1500ms
+      expect(result).toBe(1500);
+    });
+
+    it('should calculate buffer correctly for high RTT (1500ms)', async () => {
+      const maxRtt = 1500;
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(maxRtt);
+
+      const result = await service.calculateSyncBuffer('room-1');
+
+      // 2x RTT + 500ms = 3000 + 500 = 3500ms
+      expect(result).toBe(3500);
+    });
+
+    it('should clamp buffer to maximum 5000ms for very high RTT', async () => {
+      const maxRtt = 3000;
+      mockRedisService.getMaxRttForRoom.mockResolvedValue(maxRtt);
+
+      const result = await service.calculateSyncBuffer('room-1');
+
+      // 2x RTT + 500ms = 6000 + 500 = 6500ms
+      // Clamped to maximum 5000ms
+      expect(result).toBe(5000);
+    });
+
+    it('should ensure buffer is always between 1000-5000ms', async () => {
+      const testCases = [
+        { rtt: null, expected: 1000 },
+        { rtt: 0, expected: 1000 },
+        { rtt: 10, expected: 1000 },
+        { rtt: 250, expected: 1000 },
+        { rtt: 500, expected: 1500 },
+        { rtt: 1000, expected: 2500 },
+        { rtt: 2000, expected: 4500 },
+        { rtt: 2250, expected: 5000 },
+        { rtt: 3000, expected: 5000 },
+        { rtt: 5000, expected: 5000 },
+      ];
+
+      for (const { rtt, expected } of testCases) {
+        mockRedisService.getMaxRttForRoom.mockResolvedValue(rtt);
+        const result = await service.calculateSyncBuffer('room-1');
+        expect(result).toBe(expected);
+        expect(result).toBeGreaterThanOrEqual(1000);
+        expect(result).toBeLessThanOrEqual(5000);
+      }
     });
   });
 });

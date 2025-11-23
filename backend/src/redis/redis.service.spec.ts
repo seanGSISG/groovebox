@@ -213,6 +213,9 @@ describe('RedisService', () => {
         trackId: 'track-456',
         position: 100,
         lastUpdate: 1234567890,
+        startAtServerTime: null,
+        trackDuration: null,
+        syncBuffer: null,
       });
     });
 
@@ -226,6 +229,9 @@ describe('RedisService', () => {
         trackId: null,
         position: null,
         lastUpdate: null,
+        startAtServerTime: null,
+        trackDuration: null,
+        syncBuffer: null,
       });
     });
   });

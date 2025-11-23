@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoomGateway } from './room.gateway';
 import { RedisService } from '../redis/redis.service';
+import { RoomsService } from '../rooms/rooms.service';
 import { Room, RoomMember, User, Message, RoomDjHistory, RoomMemberRole, RemovalReason } from '../entities';
 import { Socket } from 'socket.io';
 
@@ -28,6 +29,14 @@ describe('RoomGateway', () => {
     getPlaybackState: jest.fn(),
     addSocketToRoom: jest.fn(),
     removeSocketFromRoom: jest.fn(),
+    getMaxRttForRoom: jest.fn(),
+    getPlaybackStartTime: jest.fn(),
+    getTrackDuration: jest.fn(),
+    setPlaybackPosition: jest.fn(),
+  };
+
+  const mockRoomsService = {
+    calculateSyncBuffer: jest.fn(),
   };
 
   const mockRoomRepository = {
@@ -65,6 +74,10 @@ describe('RoomGateway', () => {
         {
           provide: RedisService,
           useValue: mockRedisService,
+        },
+        {
+          provide: RoomsService,
+          useValue: mockRoomsService,
         },
         {
           provide: getRepositoryToken(Room),
@@ -321,7 +334,7 @@ describe('RoomGateway', () => {
   });
 
   describe('handlePlaybackStart', () => {
-    it('should allow DJ to start playback', async () => {
+    it('should allow DJ to start playback with timing metadata', async () => {
       const mockClient = {
         data: { userId: 'dj-123', username: 'djuser' },
       } as unknown as Socket;
@@ -331,8 +344,12 @@ describe('RoomGateway', () => {
         roomCode: 'ABC123',
       };
 
+      const syncBuffer = 1500;
+      const trackDuration = 180000; // 3 minutes
+
       mockRoomRepository.findOne.mockResolvedValue(mockRoom);
       mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+      mockRoomsService.calculateSyncBuffer.mockResolvedValue(syncBuffer);
 
       gateway.server = {
         to: jest.fn().mockReturnThis(),
@@ -343,17 +360,33 @@ describe('RoomGateway', () => {
         roomCode: 'ABC123',
         trackId: 'track-456',
         position: 0,
+        trackDuration,
       });
 
       expect(mockRedisService.getCurrentDj).toHaveBeenCalledWith('room-123');
+      expect(mockRoomsService.calculateSyncBuffer).toHaveBeenCalledWith('room-123');
       expect(mockRedisService.setPlaybackState).toHaveBeenCalledWith(
         'room-123',
         'playing',
         'track-456',
         0,
+        expect.any(Number), // startAtServerTime
+        trackDuration,
+        syncBuffer,
       );
       expect(gateway.server.to).toHaveBeenCalledWith('room:room-123');
+      expect(gateway.server.emit).toHaveBeenCalledWith('playback:start', expect.objectContaining({
+        roomId: 'room-123',
+        trackId: 'track-456',
+        position: 0,
+        trackDuration,
+        syncBuffer,
+        startAtServerTime: expect.any(Number),
+        serverTimestamp: expect.any(Number),
+      }));
       expect(result.success).toBe(true);
+      expect(result.syncBuffer).toBe(syncBuffer);
+      expect(result.trackDuration).toBe(trackDuration);
     });
 
     it('should reject non-DJ from starting playback', async () => {
@@ -373,14 +406,46 @@ describe('RoomGateway', () => {
         roomCode: 'ABC123',
         trackId: 'track-456',
         position: 0,
+        trackDuration: 180000,
       });
 
       expect(result).toEqual({ error: 'Only the current DJ can start playback' });
     });
+
+    it('should ensure startAtServerTime is in the future', async () => {
+      const mockClient = {
+        data: { userId: 'dj-123', username: 'djuser' },
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+      mockRoomsService.calculateSyncBuffer.mockResolvedValue(2000);
+
+      gateway.server = {
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as any;
+
+      const beforeCall = Date.now();
+      const result = await gateway.handlePlaybackStart(mockClient, {
+        roomCode: 'ABC123',
+        trackId: 'track-456',
+        position: 0,
+        trackDuration: 180000,
+      });
+
+      expect(result.startAtServerTime).toBeGreaterThan(beforeCall);
+      expect(result.startAtServerTime).toBeGreaterThan(result.serverTimestamp);
+    });
   });
 
   describe('handlePlaybackPause', () => {
-    it('should allow DJ to pause playback', async () => {
+    it('should allow DJ to pause playback with server timestamp', async () => {
       const mockClient = {
         data: { userId: 'dj-123', username: 'djuser' },
       } as unknown as Socket;
@@ -409,12 +474,19 @@ describe('RoomGateway', () => {
         undefined,
         100,
       );
+      expect(mockRedisService.setPlaybackPosition).toHaveBeenCalledWith('room-123', 100);
+      expect(gateway.server.emit).toHaveBeenCalledWith('playback:pause', expect.objectContaining({
+        roomId: 'room-123',
+        position: 100,
+        serverTimestamp: expect.any(Number),
+      }));
       expect(result.success).toBe(true);
+      expect(result.serverTimestamp).toBeDefined();
     });
   });
 
   describe('handlePlaybackStop', () => {
-    it('should allow DJ to stop playback', async () => {
+    it('should allow DJ to stop playback with server timestamp', async () => {
       const mockClient = {
         data: { userId: 'dj-123', username: 'djuser' },
       } as unknown as Socket;
@@ -437,7 +509,12 @@ describe('RoomGateway', () => {
       });
 
       expect(mockRedisService.setPlaybackState).toHaveBeenCalledWith('room-123', 'stopped');
+      expect(gateway.server.emit).toHaveBeenCalledWith('playback:stop', expect.objectContaining({
+        roomId: 'room-123',
+        serverTimestamp: expect.any(Number),
+      }));
       expect(result.success).toBe(true);
+      expect(result.serverTimestamp).toBeDefined();
     });
   });
 });
