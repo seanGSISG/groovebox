@@ -125,3 +125,14 @@ export class PlaybackSyncEventDto {
   serverTimestamp: number;       // Current server time
   startAtServerTime: number;     // Original start time (for client verification)
 }
+
+export class RoomStateEventDto {
+  roomId: string;
+  playbackState: 'playing' | 'paused' | 'stopped';
+  trackId: string;
+  djId: string;
+  position: number;              // Current position in ms (for seeking)
+  startAtServerTime: number;     // Original start time
+  trackDuration: number;         // Track duration in ms
+  serverTimestamp: number;       // Current server time
+}

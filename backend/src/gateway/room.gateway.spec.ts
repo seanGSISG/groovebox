@@ -219,6 +219,15 @@ describe('RoomGateway', () => {
 
       mockRoomRepository.findOne.mockResolvedValue(mockRoom);
       mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockResolvedValue({
+        playbackState: 'stopped',
+        trackId: null,
+        position: null,
+        startAtServerTime: null,
+        trackDuration: null,
+        syncBuffer: null,
+        lastUpdate: null,
+      });
 
       const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
 
@@ -259,6 +268,374 @@ describe('RoomGateway', () => {
       const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'INVALID' });
 
       expect(result).toEqual({ error: 'Room not found' });
+    });
+  });
+
+  describe('Mid-Song Join Support', () => {
+    it('should send room state when joining during active playback', async () => {
+      const now = Date.now();
+      const startAtServerTime = now - 30000; // Started 30 seconds ago
+      const trackDuration = 180000; // 3 minutes
+
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockResolvedValue({
+        playbackState: 'playing',
+        trackId: 'track-456',
+        position: 0,
+        startAtServerTime,
+        trackDuration,
+        syncBuffer: 1500,
+        lastUpdate: now,
+      });
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+
+      const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      expect(result).toEqual({ success: true, roomId: 'room-123' });
+      expect(mockClient.emit).toHaveBeenCalledWith('room:state', expect.objectContaining({
+        roomId: 'room-123',
+        playbackState: 'playing',
+        trackId: 'track-456',
+        djId: 'dj-123',
+        position: expect.any(Number),
+        startAtServerTime,
+        trackDuration,
+        serverTimestamp: expect.any(Number),
+      }));
+
+      // Verify position calculation (should be approximately 30 seconds)
+      const emitCall = mockClient.emit.mock.calls.find(call => call[0] === 'room:state');
+      expect(emitCall[1].position).toBeGreaterThan(29000);
+      expect(emitCall[1].position).toBeLessThan(31000);
+    });
+
+    it('should send paused position when joining paused room', async () => {
+      const pausedPosition = 90000; // Paused at 1:30
+      const trackDuration = 180000;
+      const now = Date.now();
+
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockResolvedValue({
+        playbackState: 'paused',
+        trackId: 'track-456',
+        position: pausedPosition,
+        startAtServerTime: now - 100000,
+        trackDuration,
+        syncBuffer: 1500,
+        lastUpdate: now,
+      });
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+
+      const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      expect(result).toEqual({ success: true, roomId: 'room-123' });
+      expect(mockClient.emit).toHaveBeenCalledWith('room:state', expect.objectContaining({
+        roomId: 'room-123',
+        playbackState: 'paused',
+        trackId: 'track-456',
+        djId: 'dj-123',
+        position: pausedPosition,
+        trackDuration,
+      }));
+    });
+
+    it('should not send room state when joining stopped room', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockResolvedValue({
+        playbackState: 'stopped',
+        trackId: null,
+        position: null,
+        startAtServerTime: null,
+        trackDuration: null,
+        syncBuffer: null,
+        lastUpdate: null,
+      });
+
+      const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      expect(result).toEqual({ success: true, roomId: 'room-123' });
+      expect(mockClient.emit).not.toHaveBeenCalledWith('room:state', expect.anything());
+    });
+
+    it('should calculate position correctly at various points in track', async () => {
+      const now = Date.now();
+      const trackDuration = 180000; // 3 minutes
+
+      // Test at 2 minutes elapsed
+      const startAtServerTime = now - 120000; // Started 2 minutes ago
+
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockResolvedValue({
+        playbackState: 'playing',
+        trackId: 'track-456',
+        position: 0,
+        startAtServerTime,
+        trackDuration,
+        syncBuffer: 1500,
+        lastUpdate: now,
+      });
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+
+      await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      const emitCall = mockClient.emit.mock.calls.find(call => call[0] === 'room:state');
+      expect(emitCall[1].position).toBeGreaterThan(119000);
+      expect(emitCall[1].position).toBeLessThan(121000);
+    });
+
+    it('should send stopped state when track has already ended', async () => {
+      const now = Date.now();
+      const trackDuration = 180000; // 3 minutes
+      const startAtServerTime = now - 200000; // Started 200 seconds ago (track ended)
+
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockResolvedValue({
+        playbackState: 'playing',
+        trackId: 'track-456',
+        position: 0,
+        startAtServerTime,
+        trackDuration,
+        syncBuffer: 1500,
+        lastUpdate: now,
+      });
+      mockRedisService.getCurrentDj.mockResolvedValue('dj-123');
+
+      await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      expect(mockClient.emit).toHaveBeenCalledWith('room:state', expect.objectContaining({
+        roomId: 'room-123',
+        playbackState: 'stopped',
+        trackId: 'track-456',
+        djId: 'dj-123',
+        position: trackDuration,
+        trackDuration,
+      }));
+    });
+
+    it('should not send state when track data is missing', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockResolvedValue({
+        playbackState: 'playing',
+        trackId: null, // Missing track data
+        position: null,
+        startAtServerTime: Date.now(),
+        trackDuration: null,
+        syncBuffer: null,
+        lastUpdate: Date.now(),
+      });
+
+      const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      expect(result).toEqual({ success: true, roomId: 'room-123' });
+      expect(mockClient.emit).not.toHaveBeenCalledWith('room:state', expect.anything());
+    });
+
+    it('should not send state when current DJ is missing', async () => {
+      const now = Date.now();
+
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockResolvedValue({
+        playbackState: 'playing',
+        trackId: 'track-456',
+        position: 0,
+        startAtServerTime: now - 30000,
+        trackDuration: 180000,
+        syncBuffer: 1500,
+        lastUpdate: now,
+      });
+      mockRedisService.getCurrentDj.mockResolvedValue(null); // No DJ
+
+      const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      expect(result).toEqual({ success: true, roomId: 'room-123' });
+      expect(mockClient.emit).not.toHaveBeenCalledWith('room:state', expect.anything());
+    });
+
+    it('should handle error gracefully and still allow join', async () => {
+      const mockClient = {
+        id: 'socket-123',
+        data: { userId: 'user-123', username: 'testuser' },
+        join: jest.fn(),
+        to: jest.fn().mockReturnThis(),
+        emit: jest.fn(),
+      } as unknown as Socket;
+
+      const mockRoom = {
+        id: 'room-123',
+        roomCode: 'ABC123',
+      };
+
+      const mockMember = {
+        userId: 'user-123',
+        user: {
+          username: 'testuser',
+          displayName: 'Test User',
+        },
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.findOne.mockResolvedValue(mockMember);
+      mockRedisService.getPlaybackState.mockRejectedValue(new Error('Redis error'));
+
+      const result = await gateway.handleRoomJoin(mockClient, { roomCode: 'ABC123' });
+
+      // Join should still succeed even if room state send fails
+      expect(result).toEqual({ success: true, roomId: 'room-123' });
+      expect(mockClient.join).toHaveBeenCalledWith('room:room-123');
     });
   });
 

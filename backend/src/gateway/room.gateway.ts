@@ -27,6 +27,7 @@ import {
   PlaybackPauseEventDto,
   PlaybackStopEventDto,
   PlaybackSyncEventDto,
+  RoomStateEventDto,
 } from './dto/websocket-events.dto';
 import xss from 'xss';
 
@@ -166,6 +167,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect, On
         username: member.user.username,
         displayName: member.user.displayName,
       });
+
+      // Send current room state to joining user if playback is active
+      await this.sendRoomState(client, room.id);
 
       return { success: true, roomId: room.id };
     } catch (error) {
@@ -532,6 +536,97 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect, On
       clearInterval(interval);
       this.syncIntervals.delete(roomId);
       this.logger.log(`Stopped periodic sync for room ${roomId}`);
+    }
+  }
+
+  /**
+   * Sends current room state to a joining client for mid-song synchronization
+   */
+  private async sendRoomState(client: AuthenticatedSocket, roomId: string): Promise<void> {
+    try {
+      // Retrieve complete playback state from Redis
+      const playbackState = await this.redisService.getPlaybackState(roomId);
+
+      // Only send state if music is currently playing or paused
+      if (!playbackState.playbackState || playbackState.playbackState === 'stopped') {
+        this.logger.debug(`No active playback in room ${roomId}, skipping state send`);
+        return;
+      }
+
+      // Ensure we have all required data
+      if (!playbackState.trackId || !playbackState.trackDuration) {
+        this.logger.warn(`Missing track data for room ${roomId}, cannot send state`);
+        return;
+      }
+
+      // Get current DJ
+      const djId = await this.redisService.getCurrentDj(roomId);
+      if (!djId) {
+        this.logger.warn(`No current DJ for room ${roomId}, cannot send state`);
+        return;
+      }
+
+      const now = Date.now();
+      let position: number;
+      let effectiveStartTime: number;
+
+      if (playbackState.playbackState === 'playing') {
+        // Calculate theoretical current position for playing state
+        if (!playbackState.startAtServerTime) {
+          this.logger.warn(`Missing startAtServerTime for playing room ${roomId}`);
+          return;
+        }
+
+        const elapsedMs = now - playbackState.startAtServerTime;
+        position = Math.max(0, elapsedMs);
+        effectiveStartTime = playbackState.startAtServerTime;
+
+        // Edge case: Track has already ended
+        if (position >= playbackState.trackDuration) {
+          this.logger.debug(`Track already ended in room ${roomId}, sending stopped state`);
+
+          // Send stopped state instead
+          const stoppedPayload: RoomStateEventDto = {
+            roomId,
+            playbackState: 'stopped',
+            trackId: playbackState.trackId,
+            djId,
+            position: playbackState.trackDuration,
+            startAtServerTime: playbackState.startAtServerTime,
+            trackDuration: playbackState.trackDuration,
+            serverTimestamp: now,
+          };
+
+          client.emit('room:state', stoppedPayload);
+          return;
+        }
+      } else {
+        // Paused state: use last known position from Redis
+        position = playbackState.position || 0;
+        effectiveStartTime = playbackState.startAtServerTime || now;
+      }
+
+      // Send room:state event to the joining client
+      const payload: RoomStateEventDto = {
+        roomId,
+        playbackState: playbackState.playbackState as 'playing' | 'paused' | 'stopped',
+        trackId: playbackState.trackId,
+        djId,
+        position,
+        startAtServerTime: effectiveStartTime,
+        trackDuration: playbackState.trackDuration,
+        serverTimestamp: now,
+      };
+
+      client.emit('room:state', payload);
+
+      this.logger.log(
+        `Sent room state to ${client.data.username} for room ${roomId}: ` +
+        `state=${playbackState.playbackState}, position=${position}ms, trackId=${playbackState.trackId}`,
+      );
+    } catch (error) {
+      this.logger.error(`Error sending room state for room ${roomId}: ${error.message}`);
+      // Don't throw - this is a best-effort enhancement, shouldn't block join
     }
   }
 
