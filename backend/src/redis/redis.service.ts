@@ -65,6 +65,23 @@ export class RedisService implements OnModuleDestroy {
     await this.client.quit();
   }
 
+  // Generic key-value operations
+  async get(key: string): Promise<string | null> {
+    return await this.client.get(key);
+  }
+
+  async set(key: string, value: string, ttl?: number): Promise<void> {
+    if (ttl) {
+      await this.client.setex(key, ttl, value);
+    } else {
+      await this.client.set(key, value);
+    }
+  }
+
+  async del(key: string): Promise<void> {
+    await this.client.del(key);
+  }
+
   // Room state management
   async setRoomState(roomId: string, key: string, value: string): Promise<void> {
     await this.client.hset(`room:${roomId}:state`, key, value);
@@ -97,6 +114,10 @@ export class RedisService implements OnModuleDestroy {
 
   async getCurrentDj(roomId: string): Promise<string | null> {
     return await this.getRoomState(roomId, 'currentDjId');
+  }
+
+  async removeCurrentDj(roomId: string): Promise<void> {
+    await this.setCurrentDj(roomId, null);
   }
 
   // Playback state management
