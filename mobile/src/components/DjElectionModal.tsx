@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   FlatList,
   StyleSheet,
+  Alert,
 } from 'react-native';
 import { useVote } from '../contexts/VoteContext';
 import { VoteType, RoomMember } from '../types/vote.types';
@@ -15,6 +16,7 @@ interface DjElectionModalProps {
   onClose: () => void;
   members: RoomMember[];
   roomCode: string;
+  currentUserId?: string | null;
 }
 
 export const DjElectionModal: React.FC<DjElectionModalProps> = ({
@@ -22,6 +24,7 @@ export const DjElectionModal: React.FC<DjElectionModalProps> = ({
   onClose,
   members,
   roomCode,
+  currentUserId,
 }) => {
   const { currentVote, hasVoted, voteForDj } = useVote();
   const [showResults, setShowResults] = useState(false);
@@ -30,7 +33,11 @@ export const DjElectionModal: React.FC<DjElectionModalProps> = ({
 
   const handleVote = (userId: string) => {
     if (!currentVote || hasVoted) return;
-    voteForDj(currentVote.voteSessionId, userId);
+
+    const success = voteForDj(currentVote.voteSessionId, userId);
+    if (!success) {
+      Alert.alert('Vote Failed', 'Unable to cast your vote. Please try again.');
+    }
   };
 
   const getVoteCount = (userId: string): number => {
@@ -41,15 +48,21 @@ export const DjElectionModal: React.FC<DjElectionModalProps> = ({
   const renderMember = ({ item }: { item: RoomMember }) => {
     const voteCount = getVoteCount(item.userId);
     const hasVotes = voteCount > 0;
+    const isCurrentUser = currentUserId === item.userId;
 
     return (
       <TouchableOpacity
         style={[styles.memberItem, hasVotes && styles.memberItemHighlight]}
         onPress={() => handleVote(item.userId)}
-        disabled={!isElectionActive || hasVoted}
+        disabled={!isElectionActive || hasVoted || isCurrentUser}
       >
         <View style={styles.memberInfo}>
-          <Text style={styles.memberName}>{item.displayName}</Text>
+          <View style={styles.memberNameRow}>
+            <Text style={styles.memberName}>{item.displayName}</Text>
+            {isCurrentUser && (
+              <Text style={styles.youBadge}>(You)</Text>
+            )}
+          </View>
           <Text style={styles.memberUsername}>@{item.username}</Text>
         </View>
         {showResults && isElectionActive && (
@@ -171,10 +184,20 @@ const styles = StyleSheet.create({
   memberInfo: {
     flex: 1,
   },
+  memberNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
   memberName: {
     fontSize: 16,
     fontWeight: '600',
-    marginBottom: 4,
+  },
+  youBadge: {
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '600',
+    marginLeft: 8,
   },
   memberUsername: {
     fontSize: 14,

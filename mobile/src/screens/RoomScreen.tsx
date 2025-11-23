@@ -11,9 +11,9 @@ import {
 import { useSocket } from '../hooks/useSocket';
 import { ClockSyncManager } from '../services/ClockSyncManager';
 import { SyncedAudioPlayer } from '../services/SyncedAudioPlayer';
-import { VoteProvider } from '../contexts/VoteContext';
+import { VoteProvider, useVote } from '../contexts/VoteContext';
 import { DjElectionModal } from '../components/DjElectionModal';
-import { RoomMember } from '../types/vote.types';
+import { RoomMember, VoteType } from '../types/vote.types';
 import { useAuth } from '../contexts/AuthContext';
 
 interface ChatMessage {
@@ -23,13 +23,13 @@ interface ChatMessage {
   timestamp: number;
 }
 
-export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
-  route,
-  navigation,
-}) => {
-  const { roomCode } = route.params;
-  const socket = useSocket();
-  const { user } = useAuth();
+const RoomContent: React.FC<{
+  roomCode: string;
+  navigation: any;
+  socket: any;
+  user: any;
+}> = ({ roomCode, navigation, socket, user }) => {
+  const { currentVote, startElection } = useVote();
   const syncManagerRef = useRef<ClockSyncManager | null>(null);
   const audioPlayerRef = useRef<SyncedAudioPlayer | null>(null);
 
@@ -129,6 +129,13 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
     };
   }, [socket, roomCode]);
 
+  // Auto-open modal when election starts
+  useEffect(() => {
+    if (currentVote?.voteType === VoteType.DJ_ELECTION && !currentVote.isComplete) {
+      setShowDjElection(true);
+    }
+  }, [currentVote]);
+
   const sendMessage = () => {
     if (!inputMessage.trim() || !socket) return;
 
@@ -150,6 +157,15 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
   const handlePause = () => {
     if (!socket) return;
     socket.emit('playback:pause');
+  };
+
+  const handleStartElection = () => {
+    const success = startElection(roomCode);
+    if (success) {
+      setShowDjElection(true);
+    } else {
+      Alert.alert('Error', 'Failed to start election. Please try again.');
+    }
   };
 
   const renderMessage = ({ item }: { item: ChatMessage }) => (
@@ -189,7 +205,7 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.controlButton}
-          onPress={() => setShowDjElection(true)}
+          onPress={handleStartElection}
         >
           <Text style={styles.controlButtonText}>Vote for DJ</Text>
         </TouchableOpacity>
@@ -223,8 +239,28 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
         onClose={() => setShowDjElection(false)}
         members={roomMembers}
         roomCode={roomCode}
+        currentUserId={user?.id}
       />
     </View>
+  );
+};
+
+export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
+  route,
+  navigation,
+}) => {
+  const { roomCode } = route.params;
+  const socket = useSocket();
+  const { user } = useAuth();
+
+  return (
+    <VoteProvider socket={socket} userId={user?.id || null}>
+      <RoomContent
+        roomCode={roomCode}
+        navigation={navigation}
+        socket={socket}
+        user={user}
+      />
     </VoteProvider>
   );
 };
