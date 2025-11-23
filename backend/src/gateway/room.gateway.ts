@@ -8,7 +8,7 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, UseGuards, UsePipes, ValidationPipe, Inject, forwardRef } from '@nestjs/common';
+import { Logger, UseGuards, UsePipes, ValidationPipe, Inject, forwardRef, OnModuleDestroy } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -26,6 +26,7 @@ import {
   PlaybackStartEventDto,
   PlaybackPauseEventDto,
   PlaybackStopEventDto,
+  PlaybackSyncEventDto,
 } from './dto/websocket-events.dto';
 import xss from 'xss';
 
@@ -42,11 +43,12 @@ interface AuthenticatedSocket extends Socket {
     credentials: true,
   },
 })
-export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   @WebSocketServer()
   server: Server;
 
   private readonly logger = new Logger(RoomGateway.name);
+  private syncIntervals = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -323,6 +325,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       this.server.to(`room:${room.id}`).emit('playback:start', payload);
 
+      // Start periodic sync broadcasts
+      this.startPeriodicSync(room.id);
+
       this.logger.log(
         `Playback started in room ${roomCode} by ${client.data.username} ` +
         `(syncBuffer: ${syncBuffer}ms, startAt: ${startAtServerTime})`,
@@ -374,6 +379,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       this.server.to(`room:${room.id}`).emit('playback:pause', payload);
 
+      // Stop periodic sync broadcasts
+      this.stopPeriodicSync(room.id);
+
       this.logger.log(`Playback paused in room ${roomCode} by ${client.data.username} at position ${position}ms`);
 
       return { success: true, ...payload };
@@ -418,6 +426,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       this.server.to(`room:${room.id}`).emit('playback:stop', payload);
 
+      // Stop periodic sync broadcasts
+      this.stopPeriodicSync(room.id);
+
       this.logger.log(`Playback stopped in room ${roomCode} by ${client.data.username}`);
 
       return { success: true, ...payload };
@@ -425,5 +436,116 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.error(`Error stopping playback: ${error.message}`);
       return { error: 'Failed to stop playback' };
     }
+  }
+
+  /**
+   * Broadcasts current playback state to all room members for drift correction
+   */
+  private async broadcastPlaybackSync(roomId: string): Promise<void> {
+    try {
+      // Retrieve playback state from Redis
+      const playbackState = await this.redisService.getPlaybackState(roomId);
+
+      // Only broadcast if actively playing
+      if (playbackState.playbackState !== 'playing') {
+        this.logger.debug(`Stopping sync broadcast for room ${roomId}: not playing`);
+        this.stopPeriodicSync(roomId);
+        return;
+      }
+
+      // Ensure we have all required data
+      if (!playbackState.trackId || !playbackState.startAtServerTime || !playbackState.trackDuration) {
+        this.logger.warn(`Missing playback data for room ${roomId}, stopping sync`);
+        this.stopPeriodicSync(roomId);
+        return;
+      }
+
+      // Calculate theoretical current position
+      const now = Date.now();
+      const elapsedMs = now - playbackState.startAtServerTime;
+      const position = (playbackState.position || 0) + elapsedMs;
+
+      // Check if track has ended
+      if (position >= playbackState.trackDuration) {
+        this.logger.log(`Track ended in room ${roomId}, stopping sync and emitting track:ended`);
+        this.stopPeriodicSync(roomId);
+
+        // Emit track:ended event
+        this.server.to(`room:${roomId}`).emit('track:ended', {
+          roomId,
+          trackId: playbackState.trackId,
+          serverTimestamp: now,
+        });
+
+        // Update playback state to stopped
+        await this.redisService.setPlaybackState(roomId, 'stopped');
+        return;
+      }
+
+      // Broadcast sync event to all room members
+      const payload: PlaybackSyncEventDto = {
+        roomId,
+        trackId: playbackState.trackId,
+        position,
+        serverTimestamp: now,
+        startAtServerTime: playbackState.startAtServerTime,
+      };
+
+      this.server.to(`room:${roomId}`).emit('playback:sync', payload);
+
+      this.logger.debug(
+        `Broadcasted sync for room ${roomId}: position=${position}ms, elapsed=${elapsedMs}ms`,
+      );
+    } catch (error) {
+      this.logger.error(`Error broadcasting playback sync for room ${roomId}: ${error.message}`);
+      // Don't stop the interval on transient errors, but log them
+    }
+  }
+
+  /**
+   * Starts periodic sync broadcasts for a room (every 10 seconds)
+   */
+  private startPeriodicSync(roomId: string): void {
+    // Clear any existing interval
+    this.stopPeriodicSync(roomId);
+
+    this.logger.log(`Starting periodic sync for room ${roomId}`);
+
+    // Create new interval (broadcast every 10 seconds)
+    const interval = setInterval(() => {
+      this.broadcastPlaybackSync(roomId);
+    }, 10000);
+
+    this.syncIntervals.set(roomId, interval);
+
+    // Also broadcast immediately to give clients initial sync
+    this.broadcastPlaybackSync(roomId);
+  }
+
+  /**
+   * Stops periodic sync broadcasts for a room
+   */
+  private stopPeriodicSync(roomId: string): void {
+    const interval = this.syncIntervals.get(roomId);
+
+    if (interval) {
+      clearInterval(interval);
+      this.syncIntervals.delete(roomId);
+      this.logger.log(`Stopped periodic sync for room ${roomId}`);
+    }
+  }
+
+  /**
+   * Cleanup on module destroy - clear all sync intervals
+   */
+  onModuleDestroy() {
+    this.logger.log('Cleaning up all sync intervals on module destroy');
+
+    for (const [roomId, interval] of this.syncIntervals.entries()) {
+      clearInterval(interval);
+      this.logger.debug(`Cleared sync interval for room ${roomId}`);
+    }
+
+    this.syncIntervals.clear();
   }
 }

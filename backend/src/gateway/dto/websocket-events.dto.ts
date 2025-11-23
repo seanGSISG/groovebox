@@ -117,3 +117,11 @@ export class PlaybackStopEventDto {
   roomId: string;
   serverTimestamp: number;
 }
+
+export class PlaybackSyncEventDto {
+  roomId: string;
+  trackId: string;
+  position: number;              // Current theoretical position in ms
+  serverTimestamp: number;       // Current server time
+  startAtServerTime: number;     // Original start time (for client verification)
+}
