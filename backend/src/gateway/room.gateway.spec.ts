@@ -1122,7 +1122,7 @@ describe('RoomGateway', () => {
       await gateway.handleStartElection(mockClient, roomCode);
 
       expect(mockVotesService.startDjElection).toHaveBeenCalledWith('room1');
-      expect(mockServer.to).toHaveBeenCalledWith(`room:${roomCode}`);
+      expect(mockServer.to).toHaveBeenCalledWith('room:room1');
     });
 
     it('should cast a vote for DJ', async () => {
@@ -1258,7 +1258,7 @@ describe('RoomGateway', () => {
       await gateway.handleStartMutiny(mockClient, roomCode);
 
       expect(mockVotesService.startMutiny).toHaveBeenCalledWith('room1', 'user1');
-      expect(mockServer.to).toHaveBeenCalledWith(`room:${roomCode}`);
+      expect(mockServer.to).toHaveBeenCalledWith('room:room1');
     });
 
     it('should cast a mutiny vote', async () => {

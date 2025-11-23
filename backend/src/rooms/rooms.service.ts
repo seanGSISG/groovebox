@@ -474,10 +474,10 @@ export class RoomsService {
     // Broadcast dj:changed event via WebSocket
     if (this.roomGateway?.server) {
       this.roomGateway.server.to(`room:${room.id}`).emit('dj:changed', {
-        roomId: room.id,
-        djId: djUserId,
+        newDjId: djUserId,
         username: djMember.user?.username || '',
         displayName: djMember.user?.displayName || '',
+        reason: 'owner-set',
       });
     }
 
@@ -548,10 +548,10 @@ export class RoomsService {
     // Broadcast dj:changed event via WebSocket
     if (this.roomGateway?.server) {
       this.roomGateway.server.to(`room:${room.id}`).emit('dj:changed', {
-        roomId: room.id,
-        djId: userId,
+        newDjId: userId,
         username: djMember.user?.username || '',
         displayName: djMember.user?.displayName || '',
+        reason: 'vote',
       });
     }
   }
@@ -652,7 +652,7 @@ export class RoomsService {
 
     // Filter out members on DJ cooldown
     const redis = this.redisService.getClient();
-    const eligibleMembers = [];
+    const eligibleMembers: RoomMember[] = [];
 
     for (const member of members) {
       const cooldownKey = `room:${roomId}:dj_cooldown:${member.userId}`;
@@ -673,7 +673,7 @@ export class RoomsService {
     // Remove current DJ if exists
     const currentDjId = await this.redisService.getCurrentDj(room.id);
     if (currentDjId) {
-      await this.removeDj(roomId, RemovalReason.VOTE);
+      await this.removeDj(roomId, RemovalReason.VOLUNTARY);
     }
 
     // Set new DJ in Redis
@@ -698,15 +698,6 @@ export class RoomsService {
     });
 
     await this.roomDjHistoryRepository.save(djHistory);
-
-    // Broadcast dj:changed event via WebSocket
-    if (this.roomGateway?.server) {
-      this.roomGateway.server.to(`room:${room.id}`).emit('dj:changed', {
-        roomId: room.id,
-        djId: selectedMember.userId,
-        reason: 'randomize',
-      });
-    }
 
     return djHistory;
   }

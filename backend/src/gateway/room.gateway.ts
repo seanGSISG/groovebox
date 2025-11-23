@@ -513,7 +513,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const voteResults = await this.votesService.startDjElection(room.id);
 
       // Broadcast to room
-      this.server.to(`room:${roomCode}`).emit('vote:election-started', {
+      this.server.to(`room:${room.id}`).emit('vote:election-started', {
         ...voteResults,
         initiatorId: userId,
       });
@@ -559,7 +559,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       // Broadcast updated results
-      this.server.to(`room:${room.roomCode}`).emit('vote:results-updated', updatedResults);
+      this.server.to(`room:${room.id}`).emit('vote:results-updated', updatedResults);
 
       // Check if everyone voted (auto-complete)
       const totalVoted = Object.keys(updatedResults.voteCounts || {}).reduce(
@@ -570,12 +570,17 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (totalVoted > 0 && totalVoted >= updatedResults.totalVoters) {
         // Complete the vote
         const finalResults = await this.votesService.completeVote(voteDto.voteSessionId);
-        this.server.to(`room:${room.roomCode}`).emit('vote:complete', finalResults);
+        this.server.to(`room:${room.id}`).emit('vote:complete', finalResults);
 
         if (finalResults.winner) {
+          // Get user details for the new DJ
+          const newDj = await this.userRepository.findOne({ where: { id: finalResults.winner } });
+
           // Announce new DJ
-          this.server.to(`room:${room.roomCode}`).emit('dj:changed', {
+          this.server.to(`room:${room.id}`).emit('dj:changed', {
             newDjId: finalResults.winner,
+            username: newDj?.username,
+            displayName: newDj?.displayName,
             reason: 'vote',
           });
         }
@@ -619,7 +624,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const voteResults = await this.votesService.startMutiny(room.id, userId);
 
       // Broadcast to room
-      this.server.to(`room:${roomCode}`).emit('vote:mutiny-started', {
+      this.server.to(`room:${room.id}`).emit('vote:mutiny-started', {
         ...voteResults,
         initiatorId: userId,
         targetDjId: currentDj.userId,
@@ -670,7 +675,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       // Broadcast updated results
-      this.server.to(`room:${room.roomCode}`).emit('vote:results-updated', updatedResults);
+      this.server.to(`room:${room.id}`).emit('vote:results-updated', updatedResults);
 
       // Check if everyone voted or outcome is mathematically guaranteed
       const yesVotes = updatedResults.mutinyVotes?.yes || 0;
@@ -688,7 +693,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (totalVotes >= updatedResults.totalVoters || guaranteedPass || guaranteedFail) {
         // Complete the vote
         const finalResults = await this.votesService.completeVote(voteDto.voteSessionId);
-        this.server.to(`room:${room.roomCode}`).emit('vote:complete', finalResults);
+        this.server.to(`room:${room.id}`).emit('vote:complete', finalResults);
 
         if (finalResults.mutinyPassed) {
           // Get current DJ before removing
@@ -704,11 +709,11 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
           }
 
           // Announce mutiny success
-          this.server.to(`room:${room.roomCode}`).emit('mutiny:success', {
+          this.server.to(`room:${room.id}`).emit('mutiny:success', {
             removedDjId: currentDj?.userId,
           });
         } else {
-          this.server.to(`room:${room.roomCode}`).emit('mutiny:failed', {
+          this.server.to(`room:${room.id}`).emit('mutiny:failed', {
             voteSessionId: voteDto.voteSessionId,
           });
         }
@@ -743,9 +748,14 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       const djHistory = await this.roomsService.randomizeDj(room.id);
 
-      // Broadcast to room (the broadcast is already done in the service, but we emit again for confirmation)
-      this.server.to(`room:${roomCode}`).emit('dj:changed', {
+      // Get user details for the new DJ
+      const newDj = await this.userRepository.findOne({ where: { id: djHistory.userId } });
+
+      // Broadcast to room using room.id as the socket room identifier
+      this.server.to(`room:${room.id}`).emit('dj:changed', {
         newDjId: djHistory.userId,
+        username: newDj?.username,
+        displayName: newDj?.displayName,
         reason: 'randomize',
       });
 
