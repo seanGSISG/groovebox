@@ -9,9 +9,11 @@ GrooveBox is a mobile application (iOS + Android) that enables users to create s
 - 🔊 **Synchronized Playback**: All devices play the same track in tight sync (<50ms drift)
 - 🎧 **Democratic DJ**: Vote for who controls the music
 - 🗳️ **Mutiny System**: Don't like the current DJ? Call a vote to replace them
+- 🎲 **Random DJ Selection**: Room owners can randomly select a DJ
 - 💬 **Live Chat**: Communicate with everyone in your room
 - 🔐 **Password-Protected Rooms**: Private or public listening sessions
 - 🎵 **Music Integration**: Spotify support (with more sources coming)
+- ⏱️ **Smart Cooldowns**: Prevents vote spam and ensures fair DJ rotation
 
 ## Architecture
 
@@ -26,6 +28,10 @@ GrooveBox is a mobile application (iOS + Android) that enables users to create s
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Complete technical architecture, tech stack justification, database schema, synchronization algorithms, and code examples
 - **[IMPLEMENTATION_CHECKLIST.md](./IMPLEMENTATION_CHECKLIST.md)** - Phase-by-phase implementation checklist with detailed tasks
 - **[BLUETOOTH_ANALYSIS.md](./BLUETOOTH_ANALYSIS.md)** - Analysis of Bluetooth LE Audio as an alternative/enhancement to WebSocket sync
+
+### API & Testing
+- **[Governance API Documentation](./docs/api/governance-api.md)** - WebSocket events for voting, DJ elections, and mutiny
+- **[Testing Guide](./docs/testing-guide.md)** - How to run tests and manual testing scenarios
 
 ### Quick Links
 - [Tech Stack Recommendation](./ARCHITECTURE.md#1-tech-stack-recommendation)
@@ -53,6 +59,36 @@ GrooveBox uses a sophisticated synchronization system:
 3. **Drift Correction**: Even with synchronized clocks, small drift accumulates over time. Every 5-10 seconds, devices check their playback position against the expected position and make micro-corrections.
 
 **Result**: All devices start and stay synchronized within 50ms, creating a unified audio experience.
+
+## Democratic Governance
+
+GrooveBox implements a comprehensive democratic voting system to manage DJ selection and rotation:
+
+### DJ Elections
+- **Anyone can start an election**: Any room member can initiate a DJ election vote
+- **Simple majority wins**: Each member votes for their preferred DJ candidate
+- **Tie-breaking**: If multiple candidates receive the same votes, the one who received votes first wins
+- **Auto-completion**: Vote completes automatically when all members have voted
+- **5-minute timeout**: Elections expire after 5 minutes if not all members vote
+
+### Mutiny System
+- **Democratic removal**: Start a mutiny vote to remove the current DJ
+- **Configurable threshold**: Requires majority support (default: 51% of voters)
+- **Yes/No voting**: Members vote to support or oppose the mutiny
+- **Smart completion**: Vote ends early if outcome is mathematically guaranteed
+- **Mutiny cooldown**: 10-minute cooldown between mutiny attempts to prevent spam
+- **DJ cooldown**: Removed DJs can't immediately become DJ again (configurable, default: 5 minutes)
+
+### Random DJ Selection
+- **Owner privilege**: Room owners can randomly select any member to be DJ
+- **Instant selection**: No voting required, immediate DJ assignment
+- **Fair randomization**: All room members have equal chance of selection
+
+### Vote Protection
+- **Concurrent vote prevention**: Only one vote can be active at a time
+- **One vote per member**: Each member can only vote once per vote session
+- **Expiration handling**: Votes automatically expire after 5 minutes
+- **Real-time updates**: All members see live vote counts and results
 
 ## Project Structure (Planned)
 
@@ -99,10 +135,10 @@ groovebox/
 - ⏳ Join mid-song support
 
 ### Phase 3: Democratic Governance (Weeks 7-8)
-- ⏳ DJ election voting
-- ⏳ Mutiny system
-- ⏳ Randomize DJ
-- ⏳ Cooldowns and rate limiting
+- ✅ DJ election voting
+- ✅ Mutiny system
+- ✅ Randomize DJ
+- ✅ Cooldowns and rate limiting
 
 ### Phase 4: Music Integration (Weeks 9-11)
 - ⏳ Spotify SDK integration

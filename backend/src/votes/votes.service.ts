@@ -306,7 +306,7 @@ export class VotesService {
       const noVotes = parseInt(voteData.noVotes || '0', 10);
       const threshold = parseFloat(voteData.threshold);
       const totalVotes = yesVotes + noVotes;
-      const mutinyPassed = totalVotes > 0 && yesVotes / totalVotes >= threshold;
+      const mutinyPassed = totalVotes > 0 && yesVotes / totalVoters >= threshold;
 
       return {
         voteSessionId,
