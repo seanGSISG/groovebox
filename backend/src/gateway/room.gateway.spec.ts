@@ -7,6 +7,9 @@ import { RedisService } from '../redis/redis.service';
 import { PlaybackSyncService } from './services/playback-sync.service';
 import { Room, RoomMember, User, Message, RoomDjHistory, RoomMemberRole, RemovalReason } from '../entities';
 import { Socket } from 'socket.io';
+import { VotesService } from '../votes/votes.service';
+import { VoteType } from '../entities/vote.entity';
+import { VoteForDjDto } from './dto/vote-events.dto';
 
 describe('RoomGateway', () => {
   let gateway: RoomGateway;
@@ -26,6 +29,7 @@ describe('RoomGateway', () => {
   const mockRedisClient = {
     set: jest.fn(),
     get: jest.fn(),
+    hgetall: jest.fn(),
   };
 
   const mockRedisService = {
@@ -43,6 +47,13 @@ describe('RoomGateway', () => {
   const mockPlaybackSyncService = {
     startSyncBroadcast: jest.fn(),
     stopSyncBroadcast: jest.fn(),
+  };
+
+  const mockVotesService = {
+    startDjElection: jest.fn(),
+    castVote: jest.fn(),
+    getVoteResults: jest.fn(),
+    completeVote: jest.fn(),
   };
 
   const mockRoomRepository = {
@@ -84,6 +95,10 @@ describe('RoomGateway', () => {
         {
           provide: PlaybackSyncService,
           useValue: mockPlaybackSyncService,
+        },
+        {
+          provide: VotesService,
+          useValue: mockVotesService,
         },
         {
           provide: getRepositoryToken(Room),
@@ -1047,6 +1062,92 @@ describe('RoomGateway', () => {
       expect(roomState.playback.playing).toBe(false);
       expect(roomState.playback.trackId).toBeNull();
       expect(roomState.playback.currentPosition).toBeNull();
+    });
+  });
+
+  describe('DJ Election Events', () => {
+    const createMockClient = (userId: string, socketId: string): Socket => {
+      return {
+        id: socketId,
+        data: { userId, username: 'testuser' },
+      } as unknown as Socket;
+    };
+
+    const mockServer = {
+      to: jest.fn().mockReturnThis(),
+      emit: jest.fn(),
+    };
+
+    beforeEach(() => {
+      gateway.server = mockServer as any;
+    });
+
+    it('should start a DJ election', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const roomCode = 'ABC123';
+
+      // Mock room membership
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: 'room1',
+        roomCode,
+      });
+      mockRoomMemberRepository.findOne.mockResolvedValue({
+        userId: 'user1',
+        roomId: 'room1',
+      });
+
+      // Mock votes service
+      mockVotesService.startDjElection.mockResolvedValue({
+        voteSessionId: 'vote1',
+        voteType: VoteType.DJ_ELECTION,
+        isComplete: false,
+        totalVoters: 5,
+        voteCounts: {},
+      });
+
+      await gateway.handleStartElection(mockClient, roomCode);
+
+      expect(mockVotesService.startDjElection).toHaveBeenCalledWith('room1');
+      expect(mockServer.to).toHaveBeenCalledWith(`room:${roomCode}`);
+    });
+
+    it('should cast a vote for DJ', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const voteDto: VoteForDjDto = {
+        voteSessionId: 'vote1',
+        targetUserId: 'user2',
+      };
+
+      // Mock Redis hgetall to return vote session data
+      mockRedisClient.hgetall = jest.fn().mockResolvedValue({
+        roomId: 'room1',
+        voteType: VoteType.DJ_ELECTION,
+      });
+
+      // Mock room lookup
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: 'room1',
+        roomCode: 'ABC123',
+      });
+
+      mockVotesService.castVote.mockResolvedValue({
+        voteSessionId: 'vote1',
+        voteType: VoteType.DJ_ELECTION,
+        isComplete: false,
+        totalVoters: 5,
+        voteCounts: { user2: 1 },
+      });
+
+      await gateway.handleVoteForDj(mockClient, voteDto);
+
+      expect(mockVotesService.castVote).toHaveBeenCalledWith(
+        'room1',
+        'user1',
+        {
+          voteSessionId: 'vote1',
+          targetUserId: 'user2',
+        },
+      );
     });
   });
 });

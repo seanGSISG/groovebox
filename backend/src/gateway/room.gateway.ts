@@ -26,6 +26,9 @@ import {
 import { RoomStateDto } from './dto/room-state.dto';
 import { SyncBufferHelper } from './helpers/sync-buffer.helper';
 import { PlaybackSyncService } from './services/playback-sync.service';
+import { VotesService } from '../votes/votes.service';
+import { StartElectionDto, VoteForDjDto } from './dto/vote-events.dto';
+import { WsException } from '@nestjs/websockets';
 import xss from 'xss';
 
 interface AuthenticatedSocket extends Socket {
@@ -51,6 +54,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
     private readonly playbackSyncService: PlaybackSyncService,
+    private readonly votesService: VotesService,
     @InjectRepository(Room)
     private readonly roomRepository: Repository<Room>,
     @InjectRepository(RoomMember)
@@ -475,6 +479,110 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error) {
       this.logger.error(`Error stopping playback: ${error.message}`);
       return { error: 'Failed to stop playback' };
+    }
+  }
+
+  /**
+   * Start a DJ election
+   */
+  @SubscribeMessage('vote:start-election')
+  async handleStartElection(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() roomCode: string,
+  ): Promise<void> {
+    try {
+      const userId = client.data.userId;
+      const room = await this.roomRepository.findOne({ where: { roomCode } });
+
+      if (!room) {
+        throw new WsException('Room not found');
+      }
+
+      // Verify user is a member
+      const membership = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId },
+      });
+
+      if (!membership) {
+        throw new WsException('You are not a member of this room');
+      }
+
+      // Start election
+      const voteResults = await this.votesService.startDjElection(room.id);
+
+      // Broadcast to room
+      this.server.to(`room:${roomCode}`).emit('vote:election-started', {
+        ...voteResults,
+        initiatorId: userId,
+      });
+
+      this.logger.log(`DJ election started in room ${roomCode} by user ${userId}`);
+    } catch (error) {
+      this.logger.error(`Start election error: ${error.message}`);
+      throw new WsException(error.message);
+    }
+  }
+
+  /**
+   * Cast vote for DJ candidate
+   */
+  @SubscribeMessage('vote:cast-dj')
+  async handleVoteForDj(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() voteDto: VoteForDjDto,
+  ): Promise<void> {
+    try {
+      const userId = client.data.userId;
+
+      // Get room ID from vote session
+      const redis = this.redisService.getClient();
+      const voteData = await redis.hgetall(`vote:${voteDto.voteSessionId}`);
+      const roomId = voteData.roomId;
+
+      if (!roomId) {
+        throw new WsException('Vote session not found or expired');
+      }
+
+      // Cast vote
+      const updatedResults = await this.votesService.castVote(roomId, userId, {
+        voteSessionId: voteDto.voteSessionId,
+        targetUserId: voteDto.targetUserId,
+      });
+
+      // Get room code
+      const room = await this.roomRepository.findOne({ where: { id: roomId } });
+
+      if (!room) {
+        throw new WsException('Room not found');
+      }
+
+      // Broadcast updated results
+      this.server.to(`room:${room.roomCode}`).emit('vote:results-updated', updatedResults);
+
+      // Check if everyone voted (auto-complete)
+      const totalVoted = Object.keys(updatedResults.voteCounts || {}).reduce(
+        (sum, key) => sum + updatedResults.voteCounts[key],
+        0,
+      );
+
+      if (totalVoted >= updatedResults.totalVoters) {
+        // Complete the vote
+        const finalResults = await this.votesService.completeVote(voteDto.voteSessionId);
+        this.server.to(`room:${room.roomCode}`).emit('vote:complete', finalResults);
+
+        if (finalResults.winner) {
+          // Announce new DJ
+          this.server.to(`room:${room.roomCode}`).emit('dj:changed', {
+            newDjId: finalResults.winner,
+            reason: 'vote',
+          });
+        }
+      }
+
+      this.logger.log(`Vote cast in session ${voteDto.voteSessionId} by user ${userId}`);
+    } catch (error) {
+      this.logger.error(`Vote cast error: ${error.message}`);
+      throw new WsException(error.message);
     }
   }
 }
