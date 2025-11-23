@@ -11,6 +11,10 @@ import {
 import { useSocket } from '../hooks/useSocket';
 import { ClockSyncManager } from '../services/ClockSyncManager';
 import { SyncedAudioPlayer } from '../services/SyncedAudioPlayer';
+import { VoteProvider } from '../contexts/VoteContext';
+import { DjElectionModal } from '../components/DjElectionModal';
+import { RoomMember } from '../types/vote.types';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ChatMessage {
   id: string;
@@ -25,6 +29,7 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
 }) => {
   const { roomCode } = route.params;
   const socket = useSocket();
+  const { user } = useAuth();
   const syncManagerRef = useRef<ClockSyncManager | null>(null);
   const audioPlayerRef = useRef<SyncedAudioPlayer | null>(null);
 
@@ -33,6 +38,9 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
   const [syncOffset, setSyncOffset] = useState<number>(0);
   const [syncRtt, setSyncRtt] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showDjElection, setShowDjElection] = useState(false);
+  const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
+  const [currentDjId, setCurrentDjId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -86,6 +94,17 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
       ]);
     });
 
+    // Listen for DJ changes
+    socket.on('dj:changed', (data) => {
+      console.log('[Room] DJ changed:', data);
+      setCurrentDjId(data.newDjId);
+    });
+
+    socket.on('room:members-changed', (data) => {
+      console.log('[Room] Members changed:', data);
+      setRoomMembers(data.members || []);
+    });
+
     // Update sync metrics for UI
     const metricsInterval = setInterval(() => {
       if (syncManagerRef.current) {
@@ -105,6 +124,8 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
       socket.off('playback:stop');
       socket.off('room:state');
       socket.off('chat:message');
+      socket.off('dj:changed');
+      socket.off('room:members-changed');
     };
   }, [socket, roomCode]);
 
@@ -139,13 +160,14 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
   );
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.roomCode}>Room: {roomCode}</Text>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.leaveButton}>Leave</Text>
-        </TouchableOpacity>
-      </View>
+    <VoteProvider socket={socket} userId={user?.id || null}>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.roomCode}>Room: {roomCode}</Text>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Text style={styles.leaveButton}>Leave</Text>
+          </TouchableOpacity>
+        </View>
 
       {/* Sync Metrics */}
       <View style={styles.syncMetrics}>
@@ -164,6 +186,12 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
         </TouchableOpacity>
         <TouchableOpacity style={styles.controlButton} onPress={handlePause}>
           <Text style={styles.controlButtonText}>Pause</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPress={() => setShowDjElection(true)}
+        >
+          <Text style={styles.controlButtonText}>Vote for DJ</Text>
         </TouchableOpacity>
       </View>
 
@@ -189,7 +217,15 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
           <Text style={styles.sendButtonText}>Send</Text>
         </TouchableOpacity>
       </View>
+
+      <DjElectionModal
+        visible={showDjElection}
+        onClose={() => setShowDjElection(false)}
+        members={roomMembers}
+        roomCode={roomCode}
+      />
     </View>
+    </VoteProvider>
   );
 };
 
