@@ -8,6 +8,7 @@ import { RoomsModule } from './rooms/rooms.module';
 import { RedisModule } from './redis/redis.module';
 import { GatewayModule } from './gateway/gateway.module';
 import { SyncModule } from './sync/sync.module';
+import { VotesModule } from './votes/votes.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { SyncModule } from './sync/sync.module';
     RoomsModule,
     GatewayModule,
     SyncModule,
+    VotesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
