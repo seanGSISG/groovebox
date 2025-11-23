@@ -15,6 +15,10 @@ import { QueueList } from '../components/QueueList';
 import { SubmitSongModal } from '../components/SubmitSongModal';
 import { ClockSyncManager } from '../services/ClockSyncManager';
 import { SyncedAudioPlayer } from '../services/SyncedAudioPlayer';
+import { useVoting } from '../hooks/useVoting';
+import { VoteCard } from '../components/VoteCard';
+import { StartVoteModal } from '../components/StartVoteModal';
+import { VoteType } from '../types/voting.types';
 
 interface ChatMessage {
   id: string;
@@ -40,8 +44,13 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+  const [members, setMembers] = useState<any[]>([]);
+  const [currentDjId, setCurrentDjId] = useState<string | null>(null);
+  const [showStartVoteModal, setShowStartVoteModal] = useState(false);
+  const [hasVoted, setHasVoted] = useState(false);
 
   const { queueState, submitSong, voteForSubmission, unvoteSubmission, removeSubmission } = useQueue(roomCode);
+  const { activeVote, startVote, castVote } = useVoting(roomCode);
 
   useEffect(() => {
     if (!socket) return;
@@ -80,6 +89,12 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
       if (state.playback?.playing) {
         audioPlayerRef.current?.joinMidSong(state.playback);
         setIsPlaying(true);
+      }
+      if (state.members) {
+        setMembers(state.members);
+      }
+      if (state.currentDjId !== undefined) {
+        setCurrentDjId(state.currentDjId);
       }
     });
 
@@ -168,6 +183,30 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
     }
   };
 
+  const handleStartVote = async (voteType: VoteType, targetUserId?: string) => {
+    try {
+      await startVote(voteType, targetUserId);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  const handleCastVote = async (voteFor: boolean) => {
+    if (!activeVote) return;
+
+    try {
+      await castVote(activeVote.voteSessionId, voteFor);
+      setHasVoted(true);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  // Reset hasVoted when new vote starts
+  useEffect(() => {
+    setHasVoted(false);
+  }, [activeVote?.voteSessionId]);
+
   const renderMessage = ({ item }: { item: ChatMessage }) => (
     <View style={styles.messageContainer}>
       <Text style={styles.messageUsername}>{item.username}:</Text>
@@ -203,6 +242,34 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
           <Text style={styles.controlButtonText}>Pause</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Voting UI */}
+      {activeVote && (
+        <VoteCard
+          voteState={activeVote}
+          onVote={handleCastVote}
+          hasVoted={hasVoted}
+          currentUserId={user?.id || null}
+        />
+      )}
+
+      {/* Start Vote Button - only show if no active vote */}
+      {!activeVote && (
+        <TouchableOpacity
+          style={styles.startVoteButton}
+          onPress={() => setShowStartVoteModal(true)}
+        >
+          <Text style={styles.startVoteButtonText}>Start Vote</Text>
+        </TouchableOpacity>
+      )}
+
+      <StartVoteModal
+        visible={showStartVoteModal}
+        onClose={() => setShowStartVoteModal(false)}
+        onStartVote={handleStartVote}
+        members={members}
+        currentDjId={currentDjId}
+      />
 
       {/* Tabs for Chat and Queue */}
       <View style={styles.tabContainer}>
@@ -421,5 +488,17 @@ const styles = StyleSheet.create({
     fontSize: 32,
     color: '#fff',
     fontWeight: 'bold',
+  },
+  startVoteButton: {
+    backgroundColor: '#5865F2',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    margin: 16,
+  },
+  startVoteButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
 });
