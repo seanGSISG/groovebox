@@ -8,12 +8,14 @@ import { RedisModule } from '../redis/redis.module';
 import { PlaybackSyncService } from './services/playback-sync.service';
 import { VotesModule } from '../votes/votes.module';
 import { RoomsModule } from '../rooms/rooms.module';
+import { QueueModule } from '../queue/queue.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Room, RoomMember, User, Message, RoomDjHistory]),
     RedisModule,
     VotesModule,
+    QueueModule,
     forwardRef(() => RoomsModule),
     JwtModule.registerAsync({
       useFactory: (configService: ConfigService) => ({

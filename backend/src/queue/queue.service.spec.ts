@@ -307,7 +307,8 @@ describe('QueueService', () => {
 
       const result = await service.upvoteEntry(roomCode, entryId, userId);
 
-      expect(result.userVote).toBe('up');
+      expect(result.entry?.userVote).toBe('up');
+      expect(result.wasAutoRemoved).toBe(false);
       expect(mockRedisClient.sadd).toHaveBeenCalledWith(`queue:${entryId}:upvotes`, userId);
       expect(mockRedisClient.expire).toHaveBeenCalledWith(`queue:${entryId}:upvotes`, 7 * 24 * 60 * 60);
     });
@@ -391,7 +392,8 @@ describe('QueueService', () => {
 
       const result = await service.downvoteEntry(roomCode, entryId, userId);
 
-      expect(result.userVote).toBe('down');
+      expect(result.entry?.userVote).toBe('down');
+      expect(result.wasAutoRemoved).toBe(false);
       expect(mockRedisClient.sadd).toHaveBeenCalledWith(`queue:${entryId}:downvotes`, userId);
       expect(mockRedisClient.expire).toHaveBeenCalledWith(`queue:${entryId}:downvotes`, 7 * 24 * 60 * 60);
     });

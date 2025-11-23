@@ -293,7 +293,7 @@ export class QueueService {
     roomCode: string,
     entryId: string,
     userId: string,
-  ): Promise<QueueEntryDto> {
+  ): Promise<{ entry: QueueEntryDto | null; wasAutoRemoved: boolean }> {
     // Find room
     const room = await this.roomRepository.findOne({ where: { roomCode } });
     if (!room) {
@@ -337,8 +337,11 @@ export class QueueService {
     // Get updated scores
     const { upvoteCount, downvoteCount } = await this.getVoteScore(entryId);
 
-    // Return updated DTO
-    return this.mapToDto(entry, entry.addedBy, upvoteCount, downvoteCount, 'up');
+    // Return updated DTO (upvotes don't auto-remove, so wasAutoRemoved is always false)
+    return {
+      entry: this.mapToDto(entry, entry.addedBy, upvoteCount, downvoteCount, 'up'),
+      wasAutoRemoved: false,
+    };
   }
 
   /**
@@ -348,7 +351,7 @@ export class QueueService {
     roomCode: string,
     entryId: string,
     userId: string,
-  ): Promise<QueueEntryDto> {
+  ): Promise<{ entry: QueueEntryDto | null; wasAutoRemoved: boolean }> {
     // Find room
     const room = await this.roomRepository.findOne({ where: { roomCode } });
     if (!room) {
@@ -401,14 +404,17 @@ export class QueueService {
       relations: ['addedBy'],
     });
 
-    // If entry was auto-removed, return a DTO with the cached data
+    // If entry was auto-removed, return null entry with wasAutoRemoved = true
     if (!reloadedEntry) {
       this.logger.log(`Entry ${entryId} was auto-removed after downvote`);
-      return this.mapToDto(entry, entry.addedBy, upvoteCount, downvoteCount, 'down');
+      return { entry: null, wasAutoRemoved: true };
     }
 
     // Return updated DTO with reloaded entry
-    return this.mapToDto(reloadedEntry, reloadedEntry.addedBy, upvoteCount, downvoteCount, 'down');
+    return {
+      entry: this.mapToDto(reloadedEntry, reloadedEntry.addedBy, upvoteCount, downvoteCount, 'down'),
+      wasAutoRemoved: false,
+    };
   }
 
   /**

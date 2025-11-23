@@ -48,8 +48,9 @@ export class QueueController {
     @Param('roomCode') roomCode: string,
     @Param('entryId') entryId: string,
     @Request() req,
-  ): Promise<QueueEntryDto> {
-    return this.queueService.upvoteEntry(roomCode, entryId, req.user.userId);
+  ): Promise<QueueEntryDto | null> {
+    const { entry } = await this.queueService.upvoteEntry(roomCode, entryId, req.user.userId);
+    return entry;
   }
 
   /**
@@ -60,8 +61,9 @@ export class QueueController {
     @Param('roomCode') roomCode: string,
     @Param('entryId') entryId: string,
     @Request() req,
-  ): Promise<QueueEntryDto> {
-    return this.queueService.downvoteEntry(roomCode, entryId, req.user.userId);
+  ): Promise<QueueEntryDto | null> {
+    const { entry } = await this.queueService.downvoteEntry(roomCode, entryId, req.user.userId);
+    return entry;
   }
 
   /**

@@ -11,6 +11,7 @@ import { VotesService } from '../votes/votes.service';
 import { VoteType } from '../entities/vote.entity';
 import { VoteForDjDto, VoteOnMutinyDto } from './dto/vote-events.dto';
 import { RoomsService } from '../rooms/rooms.service';
+import { QueueService } from '../queue/queue.service';
 
 describe('RoomGateway', () => {
   let gateway: RoomGateway;
@@ -66,6 +67,16 @@ describe('RoomGateway', () => {
     removeDj: jest.fn(),
   };
 
+  const mockQueueService = {
+    addToQueue: jest.fn(),
+    upvoteEntry: jest.fn(),
+    downvoteEntry: jest.fn(),
+    removeFromQueue: jest.fn(),
+    getQueueForRoom: jest.fn(),
+    getNextSong: jest.fn(),
+    markAsPlayed: jest.fn(),
+  };
+
   const mockRoomRepository = {
     findOne: jest.fn(),
   };
@@ -113,6 +124,10 @@ describe('RoomGateway', () => {
         {
           provide: RoomsService,
           useValue: mockRoomsService,
+        },
+        {
+          provide: QueueService,
+          useValue: mockQueueService,
         },
         {
           provide: getRepositoryToken(Room),
@@ -1499,6 +1514,466 @@ describe('RoomGateway', () => {
       await expect(gateway.handleVoteOnMutiny(mockClient, voteDto)).rejects.toThrow(
         'Vote session not found or expired',
       );
+    });
+  });
+
+  describe('Queue Event Handlers', () => {
+    const createMockClient = (userId: string, socketId: string): Socket => {
+      return {
+        id: socketId,
+        data: { userId, username: 'testuser' },
+        emit: jest.fn(),
+      } as unknown as Socket;
+    };
+
+    const mockServer = {
+      to: jest.fn().mockReturnThis(),
+      emit: jest.fn(),
+    };
+
+    beforeEach(() => {
+      gateway.server = mockServer as any;
+    });
+
+    describe('handleQueueAdd', () => {
+      it('should add song to queue and broadcast to all members', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+        const youtubeUrl = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        mockQueueService.addToQueue.mockResolvedValue({
+          id: 'entry1',
+          youtubeVideoId: 'dQw4w9WgXcQ',
+          title: 'Test Song',
+          artist: 'Test Artist',
+        });
+
+        mockQueueService.getQueueForRoom.mockResolvedValue({
+          entries: [{ id: 'entry1' }],
+          totalEntries: 1,
+          currentlyPlaying: null,
+        });
+
+        const result = await gateway.handleQueueAdd(mockClient, {
+          roomCode,
+          youtubeUrl,
+        });
+
+        expect(mockQueueService.addToQueue).toHaveBeenCalledWith(
+          roomCode,
+          'user1',
+          { youtubeUrl },
+        );
+        expect(mockQueueService.getQueueForRoom).toHaveBeenCalledWith(roomCode, 'user1');
+        expect(mockServer.to).toHaveBeenCalledWith('room:room1');
+        expect(mockServer.emit).toHaveBeenCalledWith('queue:updated', expect.any(Object));
+        expect(result).toEqual({ success: true });
+      });
+
+      it('should reject non-members from adding songs', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue(null);
+
+        await expect(
+          gateway.handleQueueAdd(mockClient, {
+            roomCode,
+            youtubeUrl: 'https://www.youtube.com/watch?v=test',
+          }),
+        ).rejects.toThrow('You are not a member of this room');
+      });
+
+      it('should handle YouTube API errors gracefully', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        mockQueueService.addToQueue.mockRejectedValue(
+          new Error('Invalid YouTube URL'),
+        );
+
+        await expect(
+          gateway.handleQueueAdd(mockClient, {
+            roomCode,
+            youtubeUrl: 'https://www.youtube.com/watch?v=invalid',
+          }),
+        ).rejects.toThrow('Invalid YouTube URL');
+      });
+    });
+
+    describe('handleQueueUpvote', () => {
+      it('should upvote entry and broadcast incremental update', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+        const entryId = 'entry1';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        mockQueueService.upvoteEntry.mockResolvedValue({
+          entry: {
+            id: 'entry1',
+            upvoteCount: 5,
+            downvoteCount: 2,
+            netScore: 3,
+          },
+          wasAutoRemoved: false,
+        });
+
+        const result = await gateway.handleQueueUpvote(mockClient, {
+          roomCode,
+          entryId,
+        });
+
+        expect(mockQueueService.upvoteEntry).toHaveBeenCalledWith(
+          roomCode,
+          entryId,
+          'user1',
+        );
+        expect(mockServer.to).toHaveBeenCalledWith('room:room1');
+        expect(mockServer.emit).toHaveBeenCalledWith('queue:vote-updated', {
+          entryId: 'entry1',
+          upvoteCount: 5,
+          downvoteCount: 2,
+          netScore: 3,
+        });
+        expect(result).toEqual({ success: true });
+      });
+
+      it('should handle auto-removal if entry is removed during upvote', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+        const entryId = 'entry1';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        mockQueueService.upvoteEntry.mockResolvedValue({
+          entry: null,
+          wasAutoRemoved: true,
+        });
+
+        mockQueueService.getQueueForRoom.mockResolvedValue({
+          entries: [],
+          totalEntries: 0,
+          currentlyPlaying: null,
+        });
+
+        const result = await gateway.handleQueueUpvote(mockClient, {
+          roomCode,
+          entryId,
+        });
+
+        expect(mockQueueService.getQueueForRoom).toHaveBeenCalledWith(roomCode, 'user1');
+        expect(mockServer.to).toHaveBeenCalledWith('room:room1');
+        expect(mockServer.emit).toHaveBeenCalledWith('queue:updated', expect.any(Object));
+        expect(result).toEqual({ success: true });
+      });
+    });
+
+    describe('handleQueueDownvote', () => {
+      it('should downvote entry and broadcast incremental update', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+        const entryId = 'entry1';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        mockQueueService.downvoteEntry.mockResolvedValue({
+          entry: {
+            id: 'entry1',
+            upvoteCount: 3,
+            downvoteCount: 4,
+            netScore: -1,
+          },
+          wasAutoRemoved: false,
+        });
+
+        const result = await gateway.handleQueueDownvote(mockClient, {
+          roomCode,
+          entryId,
+        });
+
+        expect(mockQueueService.downvoteEntry).toHaveBeenCalledWith(
+          roomCode,
+          entryId,
+          'user1',
+        );
+        expect(mockServer.to).toHaveBeenCalledWith('room:room1');
+        expect(mockServer.emit).toHaveBeenCalledWith('queue:vote-updated', {
+          entryId: 'entry1',
+          upvoteCount: 3,
+          downvoteCount: 4,
+          netScore: -1,
+        });
+        expect(result).toEqual({ success: true });
+      });
+
+      it('should detect and broadcast auto-removal at 51% threshold', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+        const entryId = 'entry1';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        mockQueueService.downvoteEntry.mockResolvedValue({
+          entry: null,
+          wasAutoRemoved: true,
+        });
+
+        mockQueueService.getQueueForRoom.mockResolvedValue({
+          entries: [],
+          totalEntries: 0,
+          currentlyPlaying: null,
+        });
+
+        const result = await gateway.handleQueueDownvote(mockClient, {
+          roomCode,
+          entryId,
+        });
+
+        expect(mockQueueService.getQueueForRoom).toHaveBeenCalledWith(roomCode, 'user1');
+        expect(mockServer.to).toHaveBeenCalledWith('room:room1');
+        expect(mockServer.emit).toHaveBeenCalledWith('queue:updated', expect.any(Object));
+        expect(mockServer.emit).toHaveBeenCalledWith('queue:entry-removed', {
+          entryId,
+          reason: 'downvotes',
+        });
+        expect(result).toEqual({ success: true });
+      });
+    });
+
+    describe('handleQueueRemove', () => {
+      it('should allow removal and broadcast updated queue', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+        const entryId = 'entry1';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        mockQueueService.removeFromQueue.mockResolvedValue({
+          message: 'Song removed from queue',
+        });
+
+        mockQueueService.getQueueForRoom.mockResolvedValue({
+          entries: [],
+          totalEntries: 0,
+          currentlyPlaying: null,
+        });
+
+        const result = await gateway.handleQueueRemove(mockClient, {
+          roomCode,
+          entryId,
+        });
+
+        expect(mockQueueService.removeFromQueue).toHaveBeenCalledWith(
+          roomCode,
+          entryId,
+          'user1',
+        );
+        expect(mockQueueService.getQueueForRoom).toHaveBeenCalledWith(roomCode, 'user1');
+        expect(mockServer.to).toHaveBeenCalledWith('room:room1');
+        expect(mockServer.emit).toHaveBeenCalledWith('queue:updated', expect.any(Object));
+        expect(result).toEqual({ success: true });
+      });
+
+      it('should reject non-creator from removing', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+        const entryId = 'entry1';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        mockQueueService.removeFromQueue.mockRejectedValue(
+          new Error('You can only remove your own songs'),
+        );
+
+        await expect(
+          gateway.handleQueueRemove(mockClient, {
+            roomCode,
+            entryId,
+          }),
+        ).rejects.toThrow('You can only remove your own songs');
+      });
+    });
+
+    describe('handleQueueGet', () => {
+      it('should return queue state to requesting client only', async () => {
+        const mockClient = createMockClient('user1', 'socket1');
+        const roomCode = 'ABC123';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRoomMemberRepository.findOne.mockResolvedValue({
+          userId: 'user1',
+          roomId: 'room1',
+        });
+
+        const queueState = {
+          entries: [
+            { id: 'entry1', title: 'Song 1' },
+            { id: 'entry2', title: 'Song 2' },
+          ],
+          totalEntries: 2,
+          currentlyPlaying: null,
+        };
+
+        mockQueueService.getQueueForRoom.mockResolvedValue(queueState);
+
+        const result = await gateway.handleQueueGet(mockClient, { roomCode });
+
+        expect(mockQueueService.getQueueForRoom).toHaveBeenCalledWith(roomCode, 'user1');
+        expect(mockClient.emit).toHaveBeenCalledWith('queue:state', queueState);
+        expect(mockServer.emit).not.toHaveBeenCalled();
+        expect(result).toEqual({ success: true });
+      });
+    });
+
+    describe('Auto-play in handlePlaybackStop', () => {
+      it('should auto-play next highest-scored song', async () => {
+        const mockClient = createMockClient('dj1', 'socket1');
+        const roomCode = 'ABC123';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRedisService.getCurrentDj.mockResolvedValue('dj1');
+        mockRedisService.getMaxRttForRoom.mockResolvedValue(50);
+        mockRedisClient.set.mockResolvedValue('OK');
+
+        const nextSong = {
+          id: 'song1',
+          youtubeVideoId: 'abc123',
+          title: 'Next Song',
+          artist: 'Artist Name',
+          thumbnailUrl: 'https://example.com/thumb.jpg',
+          durationSeconds: 180,
+        };
+
+        mockQueueService.getNextSong.mockResolvedValue(nextSong);
+        mockQueueService.markAsPlayed.mockResolvedValue(undefined);
+        mockQueueService.getQueueForRoom.mockResolvedValue({
+          entries: [],
+          totalEntries: 0,
+          currentlyPlaying: null,
+        });
+
+        gateway.server = mockServer as any;
+
+        const result = await gateway.handlePlaybackStop(mockClient, { roomCode });
+
+        expect(mockQueueService.getNextSong).toHaveBeenCalledWith('room1');
+        expect(mockQueueService.markAsPlayed).toHaveBeenCalledWith('song1');
+        expect(mockServer.to).toHaveBeenCalledWith('room:room1');
+        expect(mockServer.emit).toHaveBeenCalledWith(
+          'playback:start',
+          expect.objectContaining({
+            youtubeVideoId: 'abc123',
+            trackId: 'song1',
+            trackName: 'Next Song',
+            artist: 'Artist Name',
+          }),
+        );
+        expect(mockServer.emit).toHaveBeenCalledWith('queue:updated', expect.any(Object));
+        expect(result.success).toBe(true);
+      });
+
+      it('should handle empty queue gracefully', async () => {
+        const mockClient = createMockClient('dj1', 'socket1');
+        const roomCode = 'ABC123';
+
+        mockRoomRepository.findOne.mockResolvedValue({
+          id: 'room1',
+          roomCode,
+        });
+
+        mockRedisService.getCurrentDj.mockResolvedValue('dj1');
+        mockQueueService.getNextSong.mockResolvedValue(null);
+
+        gateway.server = mockServer as any;
+
+        const result = await gateway.handlePlaybackStop(mockClient, { roomCode });
+
+        expect(mockQueueService.getNextSong).toHaveBeenCalledWith('room1');
+        expect(mockQueueService.markAsPlayed).not.toHaveBeenCalled();
+        expect(result.success).toBe(true);
+      });
     });
   });
 });
