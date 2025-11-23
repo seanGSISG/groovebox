@@ -16,6 +16,8 @@ import { DjElectionModal } from '../components/DjElectionModal';
 import { MutinyModal } from '../components/MutinyModal';
 import { RoomMember, VoteType } from '../types/vote.types';
 import { useAuth } from '../contexts/AuthContext';
+import { Toast } from '../components/Toast';
+import { useToast } from '../hooks/useToast';
 
 interface ChatMessage {
   id: string;
@@ -31,6 +33,7 @@ const RoomContent: React.FC<{
   user: any;
 }> = ({ roomCode, navigation, socket, user }) => {
   const { currentVote, startElection } = useVote();
+  const { toast, showToast, hideToast } = useToast();
   const syncManagerRef = useRef<ClockSyncManager | null>(null);
   const audioPlayerRef = useRef<SyncedAudioPlayer | null>(null);
 
@@ -130,6 +133,66 @@ const RoomContent: React.FC<{
       socket.off('room:members-changed');
     };
   }, [socket, roomCode]);
+
+  // Toast notifications for vote events
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on('vote:election-started', (data) => {
+      showToast({
+        message: 'DJ election started! Vote for your favorite.',
+        type: 'info',
+      });
+    });
+
+    socket.on('vote:mutiny-started', (data) => {
+      showToast({
+        message: 'Mutiny vote started!',
+        type: 'warning',
+      });
+    });
+
+    socket.on('vote:complete', (data) => {
+      if (data.winner) {
+        const winner = roomMembers.find((m) => m.userId === data.winner);
+        showToast({
+          message: `${winner?.displayName || 'Someone'} is the new DJ!`,
+          type: 'success',
+        });
+      }
+    });
+
+    socket.on('mutiny:success', (data) => {
+      showToast({
+        message: 'Mutiny succeeded! DJ has been removed.',
+        type: 'success',
+      });
+    });
+
+    socket.on('mutiny:failed', (data) => {
+      showToast({
+        message: 'Mutiny failed. DJ remains.',
+        type: 'info',
+      });
+    });
+
+    socket.on('dj:changed', (data) => {
+      const newDj = roomMembers.find((m) => m.userId === data.newDjId);
+      showToast({
+        message: `${newDj?.displayName || 'Someone'} is now the DJ!`,
+        type: 'success',
+      });
+    });
+
+    return () => {
+      socket.off('vote:election-started');
+      socket.off('vote:mutiny-started');
+      socket.off('vote:complete');
+      socket.off('mutiny:success');
+      socket.off('mutiny:failed');
+      socket.off('dj:changed');
+    };
+  }, [socket, showToast, roomMembers]);
 
   // Auto-open modal when election starts
   useEffect(() => {
@@ -270,6 +333,14 @@ const RoomContent: React.FC<{
         currentDjName={
           roomMembers.find((m) => m.userId === currentDjId)?.displayName || null
         }
+      />
+
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        visible={toast.visible}
+        onHide={hideToast}
+        duration={toast.duration}
       />
     </View>
   );
