@@ -647,4 +647,51 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return { error: error.message };
     }
   }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('playback:ended')
+  async handlePlaybackEnded(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is the current DJ
+      const currentDjId = await this.redisService.getCurrentDj(room.id);
+      if (currentDjId !== client.data.userId) {
+        return { error: 'Only the DJ can signal playback ended' };
+      }
+
+      // Get top voted submission
+      const topSubmission = await this.queueService.getTopSubmission(room.id);
+
+      if (topSubmission) {
+        // Mark as played
+        await this.queueService.markAsPlayed(topSubmission.id);
+
+        // Broadcast auto-play event with the winning song
+        this.server.to(`room:${room.id}`).emit('queue:auto-play', {
+          submission: {
+            id: topSubmission.id,
+            youtubeUrl: topSubmission.youtubeUrl,
+            songTitle: topSubmission.songTitle,
+            artist: topSubmission.artist,
+            submittedBy: topSubmission.submittedBy,
+          },
+        });
+
+        // Broadcast updated queue
+        this.server.to(`room:${room.id}`).emit('queue:updated');
+      }
+
+      return { success: true, hasNext: !!topSubmission };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
 }
