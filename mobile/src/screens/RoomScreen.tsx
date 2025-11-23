@@ -13,6 +13,7 @@ import { ClockSyncManager } from '../services/ClockSyncManager';
 import { SyncedAudioPlayer } from '../services/SyncedAudioPlayer';
 import { VoteProvider, useVote } from '../contexts/VoteContext';
 import { DjElectionModal } from '../components/DjElectionModal';
+import { MutinyModal } from '../components/MutinyModal';
 import { RoomMember, VoteType } from '../types/vote.types';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -39,6 +40,7 @@ const RoomContent: React.FC<{
   const [syncRtt, setSyncRtt] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [showDjElection, setShowDjElection] = useState(false);
+  const [showMutiny, setShowMutiny] = useState(false);
   const [roomMembers, setRoomMembers] = useState<RoomMember[]>([]);
   const [currentDjId, setCurrentDjId] = useState<string | null>(null);
 
@@ -176,14 +178,13 @@ const RoomContent: React.FC<{
   );
 
   return (
-    <VoteProvider socket={socket} userId={user?.id || null}>
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.roomCode}>Room: {roomCode}</Text>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Text style={styles.leaveButton}>Leave</Text>
-          </TouchableOpacity>
-        </View>
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.roomCode}>Room: {roomCode}</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={styles.leaveButton}>Leave</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Sync Metrics */}
       <View style={styles.syncMetrics}>
@@ -208,6 +209,12 @@ const RoomContent: React.FC<{
           onPress={handleStartElection}
         >
           <Text style={styles.controlButtonText}>Vote for DJ</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.controlButton, styles.mutinyButton]}
+          onPress={() => setShowMutiny(true)}
+        >
+          <Text style={styles.controlButtonText}>Call Mutiny</Text>
         </TouchableOpacity>
       </View>
 
@@ -240,6 +247,15 @@ const RoomContent: React.FC<{
         members={roomMembers}
         roomCode={roomCode}
         currentUserId={user?.id}
+      />
+
+      <MutinyModal
+        visible={showMutiny}
+        onClose={() => setShowMutiny(false)}
+        roomCode={roomCode}
+        currentDjName={
+          roomMembers.find((m) => m.userId === currentDjId)?.displayName || null
+        }
       />
     </View>
   );
@@ -313,6 +329,9 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
     alignItems: 'center',
+  },
+  mutinyButton: {
+    backgroundColor: '#FF3B30',
   },
   controlButtonText: {
     color: '#fff',
