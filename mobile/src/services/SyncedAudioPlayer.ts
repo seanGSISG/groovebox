@@ -1,10 +1,18 @@
 import TrackPlayer, { State } from 'react-native-track-player';
 import { ClockSyncManager } from './ClockSyncManager';
-import { PlaybackStartEvent, RoomStatePlayback } from '../types/playback.types';
+import {
+  PlaybackStartEvent,
+  YouTubePlaybackStartEvent,
+  TrackPlayerPlaybackStartEvent,
+  RoomStatePlayback
+} from '../types/playback.types';
+import { YouTubePlayer, YouTubePlayerInterface } from './YouTubePlayer';
 
 export class SyncedAudioPlayer {
   private syncManager: ClockSyncManager;
   private driftCorrectionInterval: NodeJS.Timeout | null = null;
+  private youtubePlayer: YouTubePlayer;
+  private currentPlayerType: 'youtube' | 'trackplayer' | null = null;
 
   // Playback metadata
   private currentTrackId: string | null = null;
@@ -18,6 +26,7 @@ export class SyncedAudioPlayer {
 
   constructor(syncManager: ClockSyncManager) {
     this.syncManager = syncManager;
+    this.youtubePlayer = new YouTubePlayer(syncManager);
     this.initializePlayer();
   }
 
@@ -31,9 +40,34 @@ export class SyncedAudioPlayer {
   }
 
   /**
+   * Set YouTube player reference
+   */
+  setYouTubePlayerRef(playerRef: YouTubePlayerInterface): void {
+    this.youtubePlayer.setPlayerRef(playerRef);
+  }
+
+  /**
+   * Type guard to check if event is a YouTube playback event
+   */
+  private isYouTubeEvent(event: PlaybackStartEvent): event is YouTubePlaybackStartEvent {
+    return 'youtubeVideoId' in event;
+  }
+
+  /**
    * Handle synchronized playback start from server
    */
   public async handlePlaybackStart(event: PlaybackStartEvent): Promise<void> {
+    // Check if YouTube video or other format
+    if (this.isYouTubeEvent(event)) {
+      // Handle YouTube playback
+      console.log('[SyncedAudioPlayer] Delegating to YouTube player');
+      this.currentPlayerType = 'youtube';
+      await this.youtubePlayer.handlePlaybackStart(event);
+      return;
+    }
+
+    // Handle other formats (Spotify, local files) - existing code
+    this.currentPlayerType = 'trackplayer';
     const {
       trackId,
       trackSource,
@@ -93,7 +127,13 @@ export class SyncedAudioPlayer {
    * Handle pause event
    */
   public async handlePlaybackPause(): Promise<void> {
-    await TrackPlayer.pause();
+    // Only call the active player
+    if (this.currentPlayerType === 'youtube') {
+      await this.youtubePlayer.handlePlaybackPause();
+    } else if (this.currentPlayerType === 'trackplayer') {
+      await TrackPlayer.pause();
+    }
+
     this.stopDriftCorrection();
     console.log('[SyncedAudioPlayer] Paused');
   }
@@ -102,10 +142,17 @@ export class SyncedAudioPlayer {
    * Handle stop event
    */
   public async handlePlaybackStop(): Promise<void> {
-    await TrackPlayer.stop();
-    await TrackPlayer.reset();
+    // Only call the active player
+    if (this.currentPlayerType === 'youtube') {
+      await this.youtubePlayer.handlePlaybackStop();
+    } else if (this.currentPlayerType === 'trackplayer') {
+      await TrackPlayer.stop();
+      await TrackPlayer.reset();
+    }
+
     this.stopDriftCorrection();
     this.currentTrackId = null;
+    this.currentPlayerType = null;
     console.log('[SyncedAudioPlayer] Stopped');
   }
 
@@ -116,6 +163,31 @@ export class SyncedAudioPlayer {
     if (!playback.playing || !playback.trackId || !playback.startAtServerTime) {
       return;
     }
+
+    // Check if this is a YouTube playback
+    // TODO: Update RoomStatePlayback type to include YouTube fields
+    if ((playback as any).youtubeVideoId) {
+      console.log('[SyncedAudioPlayer] Joining mid-song with YouTube playback');
+      this.currentPlayerType = 'youtube';
+
+      // Create synthetic YouTube event
+      const syntheticEvent = {
+        youtubeVideoId: (playback as any).youtubeVideoId,
+        trackId: playback.trackId,
+        trackName: (playback as any).trackName || 'Unknown',
+        artist: (playback as any).artist || 'Unknown',
+        thumbnailUrl: (playback as any).thumbnailUrl || '',
+        durationSeconds: (playback as any).durationSeconds || 0,
+        startAtServerTime: playback.startAtServerTime,
+        serverTimestamp: playback.serverTimestamp,
+      };
+
+      await this.youtubePlayer.handlePlaybackStart(syntheticEvent);
+      return;
+    }
+
+    // Handle TrackPlayer playback (Spotify, local files, etc.)
+    this.currentPlayerType = 'trackplayer';
 
     const {
       trackId,
@@ -277,6 +349,9 @@ export class SyncedAudioPlayer {
    * Clean up when destroying
    */
   public destroy(): void {
+    if (this.youtubePlayer) {
+      this.youtubePlayer.destroy();
+    }
     this.stopDriftCorrection();
   }
 }
