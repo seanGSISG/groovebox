@@ -1,6 +1,6 @@
 import { SongSubmissionDto } from './song-submission.dto';
 
 export class QueueStateDto {
-  submissions: SongSubmissionDto[];
-  totalSubmissions: number;
+  readonly submissions: SongSubmissionDto[];
+  readonly totalSubmissions: number;
 }
