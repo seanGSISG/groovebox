@@ -31,8 +31,7 @@ GrooveBox is a mobile application (iOS + Android) that enables users to create s
 
 <img width="323" height="600" alt="chat-mutiny" src="https://github.com/user-attachments/assets/c3588e6d-94f5-4c21-ad6e-d5f72eefa87d" />
 
-<img width="621" height="1196" alt="image" src="https://github.com/user-attachments/assets/8e479f98-62b0-4158-9fc6-d8663152afec" />
-
+<img width="311" height="598" alt="mutiny-inprogress2" src="https://github.com/user-attachments/assets/75c036cb-361b-48c5-be78-f28d6c039711" />
 
 <img width="314" height="597" alt="mutiny-inprogress" src="https://github.com/user-attachments/assets/50fb5b82-f5e4-4e38-bf76-01240403c6db" />
 
