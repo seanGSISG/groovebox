@@ -20,6 +20,30 @@ GrooveBox is a mobile application (iOS + Android) that enables users to create s
 - **Database**: PostgreSQL + Redis
 - **Deployment**: Ubuntu 22.04 with Docker
 
+## Images
+<img width="325" height="618" alt="onboarding" src="https://github.com/user-attachments/assets/491cc275-51ea-4d23-80c8-66737902b37c" />
+
+<img width="316" height="602" alt="roomplayer" src="https://github.com/user-attachments/assets/8e854b27-3da9-46ab-99f8-7c1c7d167e11" />
+
+<img width="312" height="603" alt="vote-for-song" src="https://github.com/user-attachments/assets/fc7597f9-4a77-4436-b51b-26da203af494" />
+
+<img width="325" height="612" alt="chat" src="https://github.com/user-attachments/assets/28754ce5-3494-4ea8-b7d0-f0bde297cde5" />
+
+<img width="323" height="600" alt="chat-mutiny" src="https://github.com/user-attachments/assets/c3588e6d-94f5-4c21-ad6e-d5f72eefa87d" />
+
+<img width="621" height="1196" alt="image" src="https://github.com/user-attachments/assets/8e479f98-62b0-4158-9fc6-d8663152afec" />
+
+
+<img width="314" height="597" alt="mutiny-inprogress" src="https://github.com/user-attachments/assets/50fb5b82-f5e4-4e38-bf76-01240403c6db" />
+
+<img width="320" height="593" alt="mutiny-success" src="https://github.com/user-attachments/assets/fc3143fa-1328-4a9b-8682-2509238e18f3" />
+
+
+
+
+
+
+
 ## Documentation
 
 ### Core Documents
