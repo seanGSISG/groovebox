@@ -14,23 +14,23 @@ export class AddSongSubmissions1732320000000 implements MigrationInterface {
             default: 'uuid_generate_v4()',
           },
           {
-            name: 'roomId',
+            name: 'room_id',
             type: 'uuid',
             isNullable: false,
           },
           {
-            name: 'submittedBy',
+            name: 'submitted_by',
             type: 'uuid',
             isNullable: false,
           },
           {
-            name: 'youtubeUrl',
+            name: 'youtube_url',
             type: 'varchar',
             length: '500',
             isNullable: false,
           },
           {
-            name: 'songTitle',
+            name: 'song_title',
             type: 'varchar',
             length: '200',
             isNullable: true,
@@ -42,23 +42,23 @@ export class AddSongSubmissions1732320000000 implements MigrationInterface {
             isNullable: true,
           },
           {
-            name: 'voteCount',
+            name: 'vote_count',
             type: 'integer',
             default: 0,
           },
           {
-            name: 'isActive',
+            name: 'is_active',
             type: 'boolean',
             default: true,
           },
           {
-            name: 'createdAt',
-            type: 'timestamp',
+            name: 'created_at',
+            type: 'timestamptz',
             default: 'CURRENT_TIMESTAMP',
           },
           {
-            name: 'playedAt',
-            type: 'timestamp',
+            name: 'played_at',
+            type: 'timestamptz',
             isNullable: true,
           },
         ],
@@ -70,14 +70,14 @@ export class AddSongSubmissions1732320000000 implements MigrationInterface {
       'song_submissions',
       new TableIndex({
         name: 'IDX_song_submissions_room_active',
-        columnNames: ['roomId', 'isActive'],
+        columnNames: ['room_id', 'is_active'],
       }),
     );
 
     await queryRunner.createForeignKey(
       'song_submissions',
       new TableForeignKey({
-        columnNames: ['roomId'],
+        columnNames: ['room_id'],
         referencedTableName: 'rooms',
         referencedColumnNames: ['id'],
         onDelete: 'CASCADE',
@@ -87,7 +87,7 @@ export class AddSongSubmissions1732320000000 implements MigrationInterface {
     await queryRunner.createForeignKey(
       'song_submissions',
       new TableForeignKey({
-        columnNames: ['submittedBy'],
+        columnNames: ['submitted_by'],
         referencedTableName: 'users',
         referencedColumnNames: ['id'],
         onDelete: 'CASCADE',

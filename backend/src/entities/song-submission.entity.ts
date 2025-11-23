@@ -16,38 +16,38 @@ export class SongSubmission {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'uuid', name: 'room_id' })
   roomId: string;
 
   @ManyToOne(() => Room, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'roomId' })
+  @JoinColumn({ name: 'room_id' })
   room: Room;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'uuid', name: 'submitted_by' })
   submittedBy: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'submittedBy' })
+  @JoinColumn({ name: 'submitted_by' })
   submitter: User;
 
-  @Column({ type: 'varchar', length: 500 })
+  @Column({ type: 'varchar', length: 500, name: 'youtube_url' })
   youtubeUrl: string;
 
-  @Column({ type: 'varchar', length: 200, nullable: true })
-  songTitle: string;
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'song_title' })
+  songTitle: string | null;
 
   @Column({ type: 'varchar', length: 200, nullable: true })
-  artist: string;
+  artist: string | null;
 
-  @Column({ type: 'integer', default: 0 })
+  @Column({ type: 'integer', default: 0, name: 'vote_count' })
   voteCount: number;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ type: 'boolean', default: true, name: 'is_active' })
   isActive: boolean;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
 
-  @Column({ type: 'timestamp', nullable: true })
-  playedAt: Date;
+  @Column({ type: 'timestamptz', nullable: true, name: 'played_at' })
+  playedAt: Date | null;
 }
