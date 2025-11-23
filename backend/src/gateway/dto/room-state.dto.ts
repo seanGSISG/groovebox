@@ -1,4 +1,5 @@
 import { QueueStateDto } from '../../queue/dto/queue-state.dto';
+import { VoteStateDto } from '../../voting/dto/vote-state.dto';
 
 export class RoomStateDto {
   roomId: string;
@@ -12,4 +13,5 @@ export class RoomStateDto {
     serverTimestamp: number;
   };
   queueState: QueueStateDto;
+  activeVote?: VoteStateDto | null;
 }
