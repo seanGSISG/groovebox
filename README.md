@@ -93,18 +93,20 @@ groovebox/
 - ✅ Naive playback (with expected drift)
 
 ### Phase 2: Audio Synchronization (Weeks 4-6)
-- ⏳ NTP-inspired clock sync
-- ⏳ Coordinated playback scheduling
-- ⏳ Drift correction
-- ⏳ Join mid-song support
+- ✅ NTP-inspired clock sync
+- ✅ Coordinated playback scheduling
+- ✅ Drift correction
+- ✅ Join mid-song support
 
 ### Phase 3: Democratic Governance (Weeks 7-8)
-- ⏳ DJ election voting
-- ⏳ Mutiny system
-- ⏳ Randomize DJ
-- ⏳ Cooldowns and rate limiting
+- ✅ DJ election voting
+- ✅ Mutiny system
+- ✅ Randomize DJ
+- ✅ Cooldowns and rate limiting
 
 ### Phase 4: Music Integration (Weeks 9-11)
+- ⏳ Submitting YouTube URL's to queue up songs
+- ⏳ YouTube Music SDK integration
 - ⏳ Spotify SDK integration
 - ⏳ Track search and selection
 - ⏳ Local file streaming (alternative)
