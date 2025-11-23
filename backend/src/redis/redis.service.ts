@@ -97,4 +97,52 @@ export class RedisService implements OnModuleDestroy {
       lastUpdate: state.lastUpdate ? parseInt(state.lastUpdate, 10) : null,
     };
   }
+
+  // Clock synchronization management
+  async setSocketSyncState(socketId: string, offset: number, rtt: number): Promise<void> {
+    const multi = this.client.multi();
+    multi.set(`socket:${socketId}:sync.clockOffset`, offset.toString());
+    multi.set(`socket:${socketId}:sync.lastRtt`, rtt.toString());
+    // Set expiry to 5 minutes for auto-cleanup of disconnected sockets
+    multi.expire(`socket:${socketId}:sync.clockOffset`, 300);
+    multi.expire(`socket:${socketId}:sync.lastRtt`, 300);
+    await multi.exec();
+  }
+
+  async getSocketSyncState(socketId: string): Promise<{
+    clockOffset: number | null;
+    lastRtt: number | null;
+  }> {
+    const [offset, rtt] = await Promise.all([
+      this.client.get(`socket:${socketId}:sync.clockOffset`),
+      this.client.get(`socket:${socketId}:sync.lastRtt`),
+    ]);
+
+    return {
+      clockOffset: offset ? parseFloat(offset) : null,
+      lastRtt: rtt ? parseFloat(rtt) : null,
+    };
+  }
+
+  async getMaxRttForRoom(roomId: string): Promise<number | null> {
+    // Get all socket IDs in the room by querying socket keys
+    // This is a simplified implementation - in production, you'd maintain
+    // a set of socket IDs per room
+    const pattern = `socket:*:sync.lastRtt`;
+    const keys = await this.client.keys(pattern);
+
+    if (keys.length === 0) {
+      return null;
+    }
+
+    const rtts = await Promise.all(
+      keys.map(async (key) => {
+        const value = await this.client.get(key);
+        return value ? parseFloat(value) : 0;
+      }),
+    );
+
+    const maxRtt = Math.max(...rtts);
+    return maxRtt > 0 ? maxRtt : null;
+  }
 }

@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { RoomGateway } from './room.gateway';
+import { SyncGateway } from './sync.gateway';
 import { Room, RoomMember, User, Message, RoomDjHistory } from '../entities';
 import { RedisModule } from '../redis/redis.module';
 
@@ -23,7 +24,11 @@ import { RedisModule } from '../redis/redis.module';
       provide: 'RoomGateway',
       useClass: RoomGateway,
     },
+    {
+      provide: 'SyncGateway',
+      useClass: SyncGateway,
+    },
   ],
-  exports: ['RoomGateway'],
+  exports: ['RoomGateway', 'SyncGateway'],
 })
 export class GatewayModule {}

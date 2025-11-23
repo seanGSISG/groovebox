@@ -54,3 +54,24 @@ export class PlaybackStopDto {
   @IsNotEmpty()
   roomCode: string;
 }
+
+export class SyncPingDto {
+  @IsNumber()
+  @Min(0)
+  clientTimestamp: number;
+}
+
+export class SyncPongDto {
+  @IsNumber()
+  @Min(0)
+  clientTimestamp: number;
+
+  @IsNumber()
+  @Min(0)
+  serverTimestamp: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  serverProcessTime?: number;
+}

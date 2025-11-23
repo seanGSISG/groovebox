@@ -27,7 +27,20 @@ describe('RedisService', () => {
       del: jest.fn(),
       hmset: jest.fn(),
       quit: jest.fn(),
+      set: jest.fn(),
+      get: jest.fn(),
+      keys: jest.fn(),
+      expire: jest.fn(),
+      multi: jest.fn(),
     } as any;
+
+    // Mock multi() to return a chainable object
+    const mockMulti = {
+      set: jest.fn().mockReturnThis(),
+      expire: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue([]),
+    };
+    mockRedisClient.multi.mockReturnValue(mockMulti as any);
 
     (Redis as jest.MockedClass<typeof Redis>).mockImplementation(() => mockRedisClient);
 
@@ -220,6 +233,183 @@ describe('RedisService', () => {
       await service.onModuleDestroy();
 
       expect(mockRedisClient.quit).toHaveBeenCalled();
+    });
+  });
+
+  describe('setSocketSyncState', () => {
+    it('should set clock offset and RTT in Redis', async () => {
+      const mockMulti = {
+        set: jest.fn().mockReturnThis(),
+        expire: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([]),
+      };
+      mockRedisClient.multi.mockReturnValue(mockMulti as any);
+
+      await service.setSocketSyncState('socket-123', 50, 100);
+
+      expect(mockRedisClient.multi).toHaveBeenCalled();
+      expect(mockMulti.set).toHaveBeenCalledWith('socket:socket-123:sync.clockOffset', '50');
+      expect(mockMulti.set).toHaveBeenCalledWith('socket:socket-123:sync.lastRtt', '100');
+      expect(mockMulti.expire).toHaveBeenCalledWith('socket:socket-123:sync.clockOffset', 300);
+      expect(mockMulti.expire).toHaveBeenCalledWith('socket:socket-123:sync.lastRtt', 300);
+      expect(mockMulti.exec).toHaveBeenCalled();
+    });
+
+    it('should handle negative offset', async () => {
+      const mockMulti = {
+        set: jest.fn().mockReturnThis(),
+        expire: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([]),
+      };
+      mockRedisClient.multi.mockReturnValue(mockMulti as any);
+
+      await service.setSocketSyncState('socket-123', -75, 50);
+
+      expect(mockMulti.set).toHaveBeenCalledWith('socket:socket-123:sync.clockOffset', '-75');
+      expect(mockMulti.set).toHaveBeenCalledWith('socket:socket-123:sync.lastRtt', '50');
+    });
+
+    it('should handle floating point values', async () => {
+      const mockMulti = {
+        set: jest.fn().mockReturnThis(),
+        expire: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockResolvedValue([]),
+      };
+      mockRedisClient.multi.mockReturnValue(mockMulti as any);
+
+      await service.setSocketSyncState('socket-123', 50.5, 100.25);
+
+      expect(mockMulti.set).toHaveBeenCalledWith('socket:socket-123:sync.clockOffset', '50.5');
+      expect(mockMulti.set).toHaveBeenCalledWith('socket:socket-123:sync.lastRtt', '100.25');
+    });
+  });
+
+  describe('getSocketSyncState', () => {
+    it('should get clock offset and RTT from Redis', async () => {
+      mockRedisClient.get
+        .mockResolvedValueOnce('50')
+        .mockResolvedValueOnce('100');
+
+      const result = await service.getSocketSyncState('socket-123');
+
+      expect(mockRedisClient.get).toHaveBeenCalledWith('socket:socket-123:sync.clockOffset');
+      expect(mockRedisClient.get).toHaveBeenCalledWith('socket:socket-123:sync.lastRtt');
+      expect(result).toEqual({
+        clockOffset: 50,
+        lastRtt: 100,
+      });
+    });
+
+    it('should return null for non-existent sync state', async () => {
+      mockRedisClient.get
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+
+      const result = await service.getSocketSyncState('socket-123');
+
+      expect(result).toEqual({
+        clockOffset: null,
+        lastRtt: null,
+      });
+    });
+
+    it('should handle negative offset', async () => {
+      mockRedisClient.get
+        .mockResolvedValueOnce('-75')
+        .mockResolvedValueOnce('50');
+
+      const result = await service.getSocketSyncState('socket-123');
+
+      expect(result).toEqual({
+        clockOffset: -75,
+        lastRtt: 50,
+      });
+    });
+
+    it('should handle floating point values', async () => {
+      mockRedisClient.get
+        .mockResolvedValueOnce('50.5')
+        .mockResolvedValueOnce('100.25');
+
+      const result = await service.getSocketSyncState('socket-123');
+
+      expect(result).toEqual({
+        clockOffset: 50.5,
+        lastRtt: 100.25,
+      });
+    });
+  });
+
+  describe('getMaxRttForRoom', () => {
+    it('should return max RTT from all sockets', async () => {
+      mockRedisClient.keys.mockResolvedValue([
+        'socket:socket-1:sync.lastRtt',
+        'socket:socket-2:sync.lastRtt',
+        'socket:socket-3:sync.lastRtt',
+      ]);
+
+      mockRedisClient.get
+        .mockResolvedValueOnce('50')
+        .mockResolvedValueOnce('150')
+        .mockResolvedValueOnce('100');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(mockRedisClient.keys).toHaveBeenCalledWith('socket:*:sync.lastRtt');
+      expect(result).toBe(150);
+    });
+
+    it('should return null if no sockets found', async () => {
+      mockRedisClient.keys.mockResolvedValue([]);
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null if all RTTs are zero', async () => {
+      mockRedisClient.keys.mockResolvedValue([
+        'socket:socket-1:sync.lastRtt',
+        'socket:socket-2:sync.lastRtt',
+      ]);
+
+      mockRedisClient.get
+        .mockResolvedValueOnce('0')
+        .mockResolvedValueOnce('0');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBeNull();
+    });
+
+    it('should handle null values from Redis', async () => {
+      mockRedisClient.keys.mockResolvedValue([
+        'socket:socket-1:sync.lastRtt',
+        'socket:socket-2:sync.lastRtt',
+      ]);
+
+      mockRedisClient.get
+        .mockResolvedValueOnce('100')
+        .mockResolvedValueOnce(null);
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(100);
+    });
+
+    it('should handle floating point RTT values', async () => {
+      mockRedisClient.keys.mockResolvedValue([
+        'socket:socket-1:sync.lastRtt',
+        'socket:socket-2:sync.lastRtt',
+      ]);
+
+      mockRedisClient.get
+        .mockResolvedValueOnce('50.5')
+        .mockResolvedValueOnce('100.75');
+
+      const result = await service.getMaxRttForRoom('room-123');
+
+      expect(result).toBe(100.75);
     });
   });
 });
