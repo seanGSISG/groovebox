@@ -607,6 +607,32 @@ export class RoomsService {
   }
 
   /**
+   * Get current DJ for a room
+   */
+  async getCurrentDj(roomId: string): Promise<RoomDjHistory | null> {
+    return this.roomDjHistoryRepository.findOne({
+      where: {
+        roomId,
+        removedAt: IsNull(),
+      },
+      order: {
+        becameDjAt: 'DESC',
+      },
+    });
+  }
+
+  /**
+   * Get room by room code
+   */
+  async getRoomByCode(roomCode: string): Promise<Room> {
+    const room = await this.roomRepository.findOne({ where: { roomCode } });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+    return room;
+  }
+
+  /**
    * Helper method to map Room entity to RoomDetailsDto
    */
   private mapRoomToDetailsDto(room: Room, includeMembers: boolean = false): RoomDetailsDto {

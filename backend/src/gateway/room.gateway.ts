@@ -27,7 +27,8 @@ import { RoomStateDto } from './dto/room-state.dto';
 import { SyncBufferHelper } from './helpers/sync-buffer.helper';
 import { PlaybackSyncService } from './services/playback-sync.service';
 import { VotesService } from '../votes/votes.service';
-import { StartElectionDto, VoteForDjDto } from './dto/vote-events.dto';
+import { RoomsService } from '../rooms/rooms.service';
+import { StartElectionDto, VoteForDjDto, StartMutinyDto, VoteOnMutinyDto } from './dto/vote-events.dto';
 import { WsException } from '@nestjs/websockets';
 import xss from 'xss';
 
@@ -55,6 +56,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly redisService: RedisService,
     private readonly playbackSyncService: PlaybackSyncService,
     private readonly votesService: VotesService,
+    private readonly roomsService: RoomsService,
     @InjectRepository(Room)
     private readonly roomRepository: Repository<Room>,
     @InjectRepository(RoomMember)
@@ -582,6 +584,126 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.log(`Vote cast in session ${voteDto.voteSessionId} by user ${userId}`);
     } catch (error) {
       this.logger.error(`Vote cast error: ${error.message}`);
+      throw new WsException(error.message);
+    }
+  }
+
+  /**
+   * Start a mutiny vote
+   */
+  @SubscribeMessage('vote:start-mutiny')
+  async handleStartMutiny(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() roomCode: string,
+  ): Promise<void> {
+    try {
+      const userId = client.data.userId;
+      const room = await this.roomsService.getRoomByCode(roomCode);
+
+      // Verify user is a member
+      const membership = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId },
+      });
+
+      if (!membership) {
+        throw new WsException('You are not a member of this room');
+      }
+
+      // Verify there is a current DJ
+      const currentDj = await this.roomsService.getCurrentDj(room.id);
+      if (!currentDj) {
+        throw new WsException('No DJ to mutiny against');
+      }
+
+      // Start mutiny
+      const voteResults = await this.votesService.startMutiny(room.id, userId);
+
+      // Broadcast to room
+      this.server.to(`room:${roomCode}`).emit('vote:mutiny-started', {
+        ...voteResults,
+        initiatorId: userId,
+        targetDjId: currentDj.userId,
+      });
+
+      this.logger.log(`Mutiny started in room ${roomCode} by user ${userId}`);
+    } catch (error) {
+      this.logger.error(`Start mutiny error: ${error.message}`);
+      throw new WsException(error.message);
+    }
+  }
+
+  /**
+   * Cast vote on mutiny (yes/no)
+   */
+  @SubscribeMessage('vote:cast-mutiny')
+  async handleVoteOnMutiny(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() voteDto: VoteOnMutinyDto,
+  ): Promise<void> {
+    try {
+      const userId = client.data.userId;
+
+      // Get room ID from vote session
+      const redis = this.redisService.getClient();
+      const voteData = await redis.hgetall(`vote:${voteDto.voteSessionId}`);
+      const roomId = voteData.roomId;
+
+      if (!roomId) {
+        throw new WsException('Vote session not found or expired');
+      }
+
+      // Cast vote
+      const updatedResults = await this.votesService.castVote(roomId, userId, {
+        voteSessionId: voteDto.voteSessionId,
+        voteValue: voteDto.voteValue,
+      });
+
+      // Get room code
+      const room = await this.roomRepository.findOne({ where: { id: roomId } });
+
+      if (!room) {
+        throw new WsException('Room not found');
+      }
+
+      // Broadcast updated results
+      this.server.to(`room:${room.roomCode}`).emit('vote:results-updated', updatedResults);
+
+      // Check if everyone voted or threshold reached
+      const totalVotes = (updatedResults.mutinyVotes?.yes || 0) + (updatedResults.mutinyVotes?.no || 0);
+      const yesPercentage = totalVotes > 0 ? (updatedResults.mutinyVotes?.yes || 0) / totalVotes : 0;
+
+      if (totalVotes > 0 && (totalVotes >= updatedResults.totalVoters || yesPercentage >= (updatedResults.threshold || 0.51))) {
+        // Complete the vote
+        const finalResults = await this.votesService.completeVote(voteDto.voteSessionId);
+        this.server.to(`room:${room.roomCode}`).emit('vote:complete', finalResults);
+
+        if (finalResults.mutinyPassed) {
+          // Get current DJ before removing
+          const currentDj = await this.roomsService.getCurrentDj(room.id);
+
+          // Set DJ cooldown
+          if (currentDj) {
+            await this.votesService.setDjCooldown(
+              room.id,
+              currentDj.userId,
+              room.settings.djCooldownMinutes,
+            );
+          }
+
+          // Announce mutiny success
+          this.server.to(`room:${room.roomCode}`).emit('mutiny:success', {
+            removedDjId: currentDj?.userId,
+          });
+        } else {
+          this.server.to(`room:${room.roomCode}`).emit('mutiny:failed', {
+            voteSessionId: voteDto.voteSessionId,
+          });
+        }
+      }
+
+      this.logger.log(`Mutiny vote cast in session ${voteDto.voteSessionId} by user ${userId}`);
+    } catch (error) {
+      this.logger.error(`Mutiny vote error: ${error.message}`);
       throw new WsException(error.message);
     }
   }

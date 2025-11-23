@@ -9,7 +9,8 @@ import { Room, RoomMember, User, Message, RoomDjHistory, RoomMemberRole, Removal
 import { Socket } from 'socket.io';
 import { VotesService } from '../votes/votes.service';
 import { VoteType } from '../entities/vote.entity';
-import { VoteForDjDto } from './dto/vote-events.dto';
+import { VoteForDjDto, VoteOnMutinyDto } from './dto/vote-events.dto';
+import { RoomsService } from '../rooms/rooms.service';
 
 describe('RoomGateway', () => {
   let gateway: RoomGateway;
@@ -51,9 +52,18 @@ describe('RoomGateway', () => {
 
   const mockVotesService = {
     startDjElection: jest.fn(),
+    startMutiny: jest.fn(),
     castVote: jest.fn(),
     getVoteResults: jest.fn(),
     completeVote: jest.fn(),
+    setDjCooldown: jest.fn(),
+  };
+
+  const mockRoomsService = {
+    getRoomByCode: jest.fn(),
+    getCurrentDj: jest.fn(),
+    setDj: jest.fn(),
+    removeDj: jest.fn(),
   };
 
   const mockRoomRepository = {
@@ -99,6 +109,10 @@ describe('RoomGateway', () => {
         {
           provide: VotesService,
           useValue: mockVotesService,
+        },
+        {
+          provide: RoomsService,
+          useValue: mockRoomsService,
         },
         {
           provide: getRepositoryToken(Room),
@@ -1192,6 +1206,139 @@ describe('RoomGateway', () => {
 
       await expect(gateway.handleStartElection(mockClient, roomCode)).rejects.toThrow(
         'Room not found',
+      );
+    });
+  });
+
+  describe('Mutiny Events', () => {
+    const createMockClient = (userId: string, socketId: string): Socket => {
+      return {
+        id: socketId,
+        data: { userId, username: 'testuser' },
+      } as unknown as Socket;
+    };
+
+    const mockServer = {
+      to: jest.fn().mockReturnThis(),
+      emit: jest.fn(),
+    };
+
+    beforeEach(() => {
+      gateway.server = mockServer as any;
+    });
+
+    it('should start a mutiny vote', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const roomCode = 'ABC123';
+
+      mockRoomsService.getRoomByCode.mockResolvedValue({
+        id: 'room1',
+        roomCode,
+        settings: { mutinyThreshold: 0.51 },
+      });
+      mockRoomMemberRepository.findOne.mockResolvedValue({
+        userId: 'user1',
+        roomId: 'room1',
+      });
+
+      mockRoomsService.getCurrentDj.mockResolvedValue({
+        userId: 'dj1',
+        roomId: 'room1',
+      });
+
+      mockVotesService.startMutiny.mockResolvedValue({
+        voteSessionId: 'mutiny1',
+        voteType: VoteType.MUTINY,
+        isComplete: false,
+        totalVoters: 5,
+        mutinyVotes: { yes: 0, no: 0 },
+        threshold: 0.51,
+      });
+
+      await gateway.handleStartMutiny(mockClient, roomCode);
+
+      expect(mockVotesService.startMutiny).toHaveBeenCalledWith('room1', 'user1');
+      expect(mockServer.to).toHaveBeenCalledWith(`room:${roomCode}`);
+    });
+
+    it('should cast a mutiny vote', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const voteDto: VoteOnMutinyDto = {
+        voteSessionId: 'mutiny1',
+        voteValue: true,
+      };
+
+      // Mock Redis hgetall to return vote session data
+      mockRedisClient.hgetall = jest.fn().mockResolvedValue({
+        roomId: 'room1',
+        voteType: VoteType.MUTINY,
+      });
+
+      // Mock room lookup
+      mockRoomRepository.findOne.mockResolvedValue({
+        id: 'room1',
+        roomCode: 'ABC123',
+        settings: { djCooldownMinutes: 5 },
+      });
+
+      mockVotesService.castVote.mockResolvedValue({
+        voteSessionId: 'mutiny1',
+        voteType: VoteType.MUTINY,
+        isComplete: false,
+        totalVoters: 5,
+        mutinyVotes: { yes: 1, no: 1 },
+        threshold: 0.51,
+      });
+
+      await gateway.handleVoteOnMutiny(mockClient, voteDto);
+
+      expect(mockVotesService.castVote).toHaveBeenCalledWith(
+        'room1',
+        'user1',
+        {
+          voteSessionId: 'mutiny1',
+          voteValue: true,
+        },
+      );
+    });
+
+    it('should throw WsException when non-member tries to start mutiny', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const roomCode = 'ABC123';
+
+      // Mock room exists
+      mockRoomsService.getRoomByCode.mockResolvedValue({
+        id: 'room1',
+        roomCode,
+      });
+
+      // Mock user is NOT a member
+      mockRoomMemberRepository.findOne.mockResolvedValue(null);
+
+      await expect(gateway.handleStartMutiny(mockClient, roomCode)).rejects.toThrow(
+        'You are not a member of this room',
+      );
+    });
+
+    it('should throw WsException when no DJ to mutiny against', async () => {
+      const mockClient = createMockClient('user1', 'socket1');
+      const roomCode = 'ABC123';
+
+      mockRoomsService.getRoomByCode.mockResolvedValue({
+        id: 'room1',
+        roomCode,
+      });
+
+      mockRoomMemberRepository.findOne.mockResolvedValue({
+        userId: 'user1',
+        roomId: 'room1',
+      });
+
+      // No current DJ
+      mockRoomsService.getCurrentDj.mockResolvedValue(null);
+
+      await expect(gateway.handleStartMutiny(mockClient, roomCode)).rejects.toThrow(
+        'No DJ to mutiny against',
       );
     });
   });

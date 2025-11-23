@@ -1,4 +1,4 @@
-import { IsUUID } from 'class-validator';
+import { IsUUID, IsBoolean } from 'class-validator';
 import { VoteType } from '../../entities/vote.entity';
 
 export class StartElectionDto {
@@ -11,6 +11,18 @@ export class VoteForDjDto {
 
   @IsUUID()
   targetUserId: string;
+}
+
+export class StartMutinyDto {
+  // No additional fields needed
+}
+
+export class VoteOnMutinyDto {
+  @IsUUID()
+  voteSessionId: string;
+
+  @IsBoolean()
+  voteValue: boolean; // true = yes, false = no
 }
 
 export class VoteResultsEventDto {
