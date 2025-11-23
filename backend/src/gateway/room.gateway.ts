@@ -26,6 +26,8 @@ import {
 import { RoomStateDto } from './dto/room-state.dto';
 import { SyncBufferHelper } from './helpers/sync-buffer.helper';
 import { PlaybackSyncService } from './services/playback-sync.service';
+import { QueueService } from '../queue/queue.service';
+import { VotingService } from '../voting/voting.service';
 import xss from 'xss';
 
 interface AuthenticatedSocket extends Socket {
@@ -51,6 +53,8 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
     private readonly playbackSyncService: PlaybackSyncService,
+    private readonly queueService: QueueService,
+    private readonly votingService: VotingService,
     @InjectRepository(Room)
     private readonly roomRepository: Repository<Room>,
     @InjectRepository(RoomMember)
@@ -196,11 +200,19 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
       }
 
+      // Get queue state
+      const queueState = await this.queueService.getQueueState(room.id, userId);
+
+      // Get active vote if exists
+      const activeVote = await this.votingService.getActiveVote(room.id);
+
       const roomState: RoomStateDto = {
         roomId: room.id,
         members: [], // TODO: fetch from room members
         currentDjId,
         playback: playbackState,
+        queueState,
+        activeVote,
       };
 
       client.emit('room:state', roomState);
@@ -475,6 +487,331 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error) {
       this.logger.error(`Error stopping playback: ${error.message}`);
       return { error: 'Failed to stop playback' };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('queue:submit')
+  async handleQueueSubmit(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; youtubeUrl: string; songTitle?: string; artist?: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
+      const submission = await this.queueService.submitSong(
+        room.id,
+        client.data.userId,
+        {
+          youtubeUrl: payload.youtubeUrl,
+          songTitle: payload.songTitle,
+          artist: payload.artist,
+        },
+      );
+
+      // Notify all room members that queue changed - they'll refetch with their own hasVoted
+      this.server.to(`room:${room.id}`).emit('queue:updated');
+
+      // Return the full queue state to the requesting client
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return { success: true, submission, queueState };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('queue:vote')
+  async handleQueueVote(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; submissionId: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
+      await this.queueService.voteForSubmission(payload.submissionId, client.data.userId);
+
+      // Notify all room members that queue changed - they'll refetch with their own hasVoted
+      this.server.to(`room:${room.id}`).emit('queue:updated');
+
+      // Return the full queue state to the requesting client
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return { success: true, queueState };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('queue:unvote')
+  async handleQueueUnvote(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; submissionId: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
+      await this.queueService.unvoteSubmission(payload.submissionId, client.data.userId);
+
+      // Notify all room members that queue changed - they'll refetch with their own hasVoted
+      this.server.to(`room:${room.id}`).emit('queue:updated');
+
+      // Return the full queue state to the requesting client
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return { success: true, queueState };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('queue:remove')
+  async handleQueueRemove(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; submissionId: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
+      await this.queueService.removeSubmission(payload.submissionId, client.data.userId);
+
+      // Notify all room members that queue changed - they'll refetch with their own hasVoted
+      this.server.to(`room:${room.id}`).emit('queue:updated');
+
+      // Return the full queue state to the requesting client
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return { success: true, queueState };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('queue:get')
+  async handleQueueGet(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return queueState;
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('playback:ended')
+  async handlePlaybackEnded(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is the current DJ
+      const currentDjId = await this.redisService.getCurrentDj(room.id);
+      if (currentDjId !== client.data.userId) {
+        return { error: 'Only the DJ can signal playback ended' };
+      }
+
+      // Get top voted submission
+      const topSubmission = await this.queueService.getTopSubmission(room.id);
+
+      if (topSubmission) {
+        // Mark as played
+        await this.queueService.markAsPlayed(topSubmission.id);
+
+        // Broadcast auto-play event with the winning song
+        this.server.to(`room:${room.id}`).emit('queue:auto-play', {
+          submission: {
+            id: topSubmission.id,
+            youtubeUrl: topSubmission.youtubeUrl,
+            songTitle: topSubmission.songTitle,
+            artist: topSubmission.artist,
+            submittedBy: topSubmission.submittedBy,
+          },
+        });
+
+        // Broadcast updated queue
+        this.server.to(`room:${room.id}`).emit('queue:updated');
+      }
+
+      return { success: true, hasNext: !!topSubmission };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('vote:start')
+  async handleVoteStart(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; voteType: string; targetUserId?: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is a room member
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+
+      if (!member) {
+        return { error: 'You must be a room member to start a vote' };
+      }
+
+      const { voteSessionId, voteState } = await this.votingService.startVote(
+        room.id,
+        client.data.userId,
+        {
+          voteType: payload.voteType as any,
+          targetUserId: payload.targetUserId,
+        },
+      );
+
+      // Broadcast vote started to all room members
+      this.server.to(`room:${room.id}`).emit('vote:started', voteState);
+
+      return { success: true, voteSessionId, voteState };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('vote:cast')
+  async handleVoteCast(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; voteSessionId: string; voteFor: boolean },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
+      const voteState = await this.votingService.castVote(
+        payload.voteSessionId,
+        client.data.userId,
+        { voteSessionId: payload.voteSessionId, voteFor: payload.voteFor },
+      );
+
+      // Broadcast vote update to all room members
+      this.server.to(`room:${room.id}`).emit('vote:updated', voteState);
+
+      // If vote completed, broadcast result
+      if (!voteState.isActive) {
+        if (voteState.passed) {
+          this.server.to(`room:${room.id}`).emit('vote:passed', voteState);
+
+          // If DJ election passed, broadcast new DJ
+          if (voteState.voteType === 'dj_election' && voteState.targetUserId) {
+            const newDjId = await this.redisService.getCurrentDj(room.id);
+            this.server.to(`room:${room.id}`).emit('dj:changed', { djId: newDjId });
+          } else if (voteState.voteType === 'mutiny') {
+            // Mutiny passed, DJ removed
+            this.server.to(`room:${room.id}`).emit('dj:changed', { djId: null });
+          }
+        } else {
+          this.server.to(`room:${room.id}`).emit('vote:failed', voteState);
+        }
+      }
+
+      return { success: true, voteState };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @UseGuards(WsJwtGuard)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  @SubscribeMessage('vote:get')
+  async handleVoteGet(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      const voteState = await this.votingService.getActiveVote(room.id);
+      return voteState;
+    } catch (error) {
+      return { error: error.message };
     }
   }
 }

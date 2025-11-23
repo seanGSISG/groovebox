@@ -1,3 +1,6 @@
+import { QueueStateDto } from '../../queue/dto/queue-state.dto';
+import { VoteStateDto } from '../../voting/dto/vote-state.dto';
+
 export class RoomStateDto {
   roomId: string;
   members: Array<{ userId: string; username: string }>;
@@ -9,4 +12,6 @@ export class RoomStateDto {
     currentPosition: number | null; // for mid-song join
     serverTimestamp: number;
   };
+  queueState: QueueStateDto;
+  activeVote?: VoteStateDto | null;
 }

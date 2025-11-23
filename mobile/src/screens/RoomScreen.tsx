@@ -9,8 +9,16 @@ import {
   Alert,
 } from 'react-native';
 import { useSocket } from '../hooks/useSocket';
+import { useAuth } from '../contexts/AuthContext';
+import { useQueue } from '../hooks/useQueue';
+import { QueueList } from '../components/QueueList';
+import { SubmitSongModal } from '../components/SubmitSongModal';
 import { ClockSyncManager } from '../services/ClockSyncManager';
 import { SyncedAudioPlayer } from '../services/SyncedAudioPlayer';
+import { useVoting } from '../hooks/useVoting';
+import { VoteCard } from '../components/VoteCard';
+import { StartVoteModal } from '../components/StartVoteModal';
+import { VoteType } from '../types/voting.types';
 
 interface ChatMessage {
   id: string;
@@ -25,6 +33,7 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
 }) => {
   const { roomCode } = route.params;
   const socket = useSocket();
+  const { user } = useAuth();
   const syncManagerRef = useRef<ClockSyncManager | null>(null);
   const audioPlayerRef = useRef<SyncedAudioPlayer | null>(null);
 
@@ -33,6 +42,15 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
   const [syncOffset, setSyncOffset] = useState<number>(0);
   const [syncRtt, setSyncRtt] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
+  const [members, setMembers] = useState<any[]>([]);
+  const [currentDjId, setCurrentDjId] = useState<string | null>(null);
+  const [showStartVoteModal, setShowStartVoteModal] = useState(false);
+  const [hasVoted, setHasVoted] = useState(false);
+
+  const { queueState, submitSong, voteForSubmission, unvoteSubmission, removeSubmission } = useQueue(roomCode);
+  const { activeVote, startVote, castVote } = useVoting(roomCode);
 
   useEffect(() => {
     if (!socket) return;
@@ -71,6 +89,12 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
       if (state.playback?.playing) {
         audioPlayerRef.current?.joinMidSong(state.playback);
         setIsPlaying(true);
+      }
+      if (state.members) {
+        setMembers(state.members);
+      }
+      if (state.currentDjId !== undefined) {
+        setCurrentDjId(state.currentDjId);
       }
     });
 
@@ -131,6 +155,58 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
     socket.emit('playback:pause');
   };
 
+  const handleSubmitSong = async (youtubeUrl: string, songTitle?: string, artist?: string) => {
+    await submitSong(youtubeUrl, songTitle, artist);
+  };
+
+  const handleVote = async (submissionId: string) => {
+    try {
+      await voteForSubmission(submissionId);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  const handleUnvote = async (submissionId: string) => {
+    try {
+      await unvoteSubmission(submissionId);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  const handleRemove = async (submissionId: string) => {
+    try {
+      await removeSubmission(submissionId);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  const handleStartVote = async (voteType: VoteType, targetUserId?: string) => {
+    try {
+      await startVote(voteType, targetUserId);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  const handleCastVote = async (voteFor: boolean) => {
+    if (!activeVote) return;
+
+    try {
+      await castVote(activeVote.voteSessionId, voteFor);
+      setHasVoted(true);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  // Reset hasVoted when new vote starts
+  useEffect(() => {
+    setHasVoted(false);
+  }, [activeVote?.voteSessionId]);
+
   const renderMessage = ({ item }: { item: ChatMessage }) => (
     <View style={styles.messageContainer}>
       <Text style={styles.messageUsername}>{item.username}:</Text>
@@ -167,28 +243,105 @@ export const RoomScreen: React.FC<{ route: any; navigation: any }> = ({
         </TouchableOpacity>
       </View>
 
-      {/* Chat */}
-      <FlatList
-        data={messages}
-        renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
-        style={styles.messageList}
-        contentContainerStyle={styles.messageListContent}
+      {/* Voting UI */}
+      {activeVote && (
+        <VoteCard
+          voteState={activeVote}
+          onVote={handleCastVote}
+          hasVoted={hasVoted}
+          currentUserId={user?.id || null}
+        />
+      )}
+
+      {/* Start Vote Button - only show if no active vote */}
+      {!activeVote && (
+        <TouchableOpacity
+          style={styles.startVoteButton}
+          onPress={() => setShowStartVoteModal(true)}
+        >
+          <Text style={styles.startVoteButtonText}>Start Vote</Text>
+        </TouchableOpacity>
+      )}
+
+      <StartVoteModal
+        visible={showStartVoteModal}
+        onClose={() => setShowStartVoteModal(false)}
+        onStartVote={handleStartVote}
+        members={members}
+        currentDjId={currentDjId}
       />
 
-      {/* Chat Input */}
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="Type a message..."
-          value={inputMessage}
-          onChangeText={setInputMessage}
-          onSubmitEditing={sendMessage}
-        />
-        <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
-          <Text style={styles.sendButtonText}>Send</Text>
+      {/* Tabs for Chat and Queue */}
+      <View style={styles.tabContainer}>
+        <TouchableOpacity
+          style={[styles.tab, !showQueue && styles.activeTab]}
+          onPress={() => setShowQueue(false)}
+        >
+          <Text style={[styles.tabText, !showQueue && styles.activeTabText]}>
+            Chat
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, showQueue && styles.activeTab]}
+          onPress={() => setShowQueue(true)}
+        >
+          <Text style={[styles.tabText, showQueue && styles.activeTabText]}>
+            Queue ({queueState.totalSubmissions})
+          </Text>
         </TouchableOpacity>
       </View>
+
+      {showQueue ? (
+        <QueueList
+          submissions={queueState.submissions}
+          onVote={handleVote}
+          onUnvote={handleUnvote}
+          onRemove={handleRemove}
+          currentUserId={user?.id || null}
+        />
+      ) : (
+        <>
+          {/* Chat */}
+          <FlatList
+            data={messages}
+            renderItem={renderMessage}
+            keyExtractor={(item) => item.id}
+            style={styles.messageList}
+            contentContainerStyle={styles.messageListContent}
+          />
+
+          {/* Chat Input */}
+          <View style={styles.inputContainer}>
+            <TextInput
+              style={styles.input}
+              placeholder="Type a message..."
+              value={inputMessage}
+              onChangeText={setInputMessage}
+              onSubmitEditing={sendMessage}
+            />
+            <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
+              <Text style={styles.sendButtonText}>Send</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+
+      {/* Floating Action Button for submitting songs */}
+      {showQueue && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => setShowSubmitModal(true)}
+        >
+          <Text style={styles.fabIcon}>+</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Submit Song Modal */}
+      <SubmitSongModal
+        visible={showSubmitModal}
+        onClose={() => setShowSubmitModal(false)}
+        onSubmit={handleSubmitSong}
+      />
     </View>
   );
 };
@@ -291,5 +444,61 @@ const styles = StyleSheet.create({
   sendButtonText: {
     color: '#fff',
     fontWeight: '600',
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#2a2a3e',
+    backgroundColor: '#fff',
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  activeTab: {
+    borderBottomWidth: 2,
+    borderBottomColor: '#5865F2',
+  },
+  tabText: {
+    fontSize: 16,
+    color: '#808080',
+  },
+  activeTabText: {
+    color: '#000',
+    fontWeight: '600',
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 80,
+    right: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#5865F2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  fabIcon: {
+    fontSize: 32,
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  startVoteButton: {
+    backgroundColor: '#5865F2',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    margin: 16,
+  },
+  startVoteButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
 });

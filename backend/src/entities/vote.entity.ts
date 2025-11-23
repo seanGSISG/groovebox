@@ -51,6 +51,9 @@ export class Vote {
   @JoinColumn({ name: 'target_user_id' })
   targetUser: User | null;
 
+  @Column({ type: 'boolean', nullable: true, name: 'vote_for' })
+  voteFor: boolean | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
 
