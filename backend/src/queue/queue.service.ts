@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { SongSubmission, SongSubmissionVote, User } from '../entities';
 import { SubmitSongDto, SongSubmissionDto, QueueStateDto } from './dto';
 
@@ -11,6 +11,7 @@ export class QueueService {
     private songSubmissionRepository: Repository<SongSubmission>,
     @InjectRepository(SongSubmissionVote)
     private voteRepository: Repository<SongSubmissionVote>,
+    private dataSource: DataSource,
   ) {}
 
   async submitSong(
@@ -31,25 +32,28 @@ export class QueueService {
       throw new BadRequestException('This song is already in the queue');
     }
 
-    const submission = this.songSubmissionRepository.create({
-      roomId,
-      submittedBy: userId,
-      youtubeUrl: submitSongDto.youtubeUrl,
-      songTitle: submitSongDto.songTitle,
-      artist: submitSongDto.artist,
-      voteCount: 1, // Auto-upvote by submitter
+    // Use transaction to ensure submission and vote are created atomically
+    return await this.dataSource.transaction(async (manager) => {
+      const submission = manager.create(SongSubmission, {
+        roomId,
+        submittedBy: userId,
+        youtubeUrl: submitSongDto.youtubeUrl,
+        songTitle: submitSongDto.songTitle,
+        artist: submitSongDto.artist,
+        voteCount: 1, // Auto-upvote by submitter
+      });
+
+      const saved = await manager.save(SongSubmission, submission);
+
+      // Auto-vote by submitter
+      const vote = manager.create(SongSubmissionVote, {
+        submissionId: saved.id,
+        userId,
+      });
+      await manager.save(SongSubmissionVote, vote);
+
+      return saved;
     });
-
-    const saved = await this.songSubmissionRepository.save(submission);
-
-    // Auto-vote by submitter
-    const vote = this.voteRepository.create({
-      submissionId: saved.id,
-      userId,
-    });
-    await this.voteRepository.save(vote);
-
-    return saved;
   }
 
   async getQueueState(roomId: string, currentUserId: string): Promise<QueueStateDto> {
@@ -67,7 +71,7 @@ export class QueueService {
     const userVotes = await this.voteRepository.find({
       where: {
         userId: currentUserId,
-        submissionId: submissions.map(s => s.id) as any,
+        submissionId: In(submissions.map(s => s.id)),
       },
     });
 
@@ -77,8 +81,8 @@ export class QueueService {
       id: sub.id,
       roomId: sub.roomId,
       submittedBy: sub.submittedBy,
-      submitterUsername: (sub.submitter as any).username,
-      submitterDisplayName: (sub.submitter as any).displayName,
+      submitterUsername: (sub.submitter as User).username,
+      submitterDisplayName: (sub.submitter as User).displayName,
       youtubeUrl: sub.youtubeUrl,
       songTitle: sub.songTitle,
       artist: sub.artist,
@@ -102,25 +106,28 @@ export class QueueService {
       throw new NotFoundException('Submission not found');
     }
 
-    // Check if already voted
-    const existingVote = await this.voteRepository.findOne({
-      where: { submissionId, userId },
+    // Use transaction to prevent race conditions
+    return await this.dataSource.transaction(async (manager) => {
+      // Check if already voted
+      const existingVote = await manager.findOne(SongSubmissionVote, {
+        where: { submissionId, userId },
+      });
+
+      if (existingVote) {
+        throw new BadRequestException('You have already voted for this song');
+      }
+
+      // Create vote
+      const vote = manager.create(SongSubmissionVote, {
+        submissionId,
+        userId,
+      });
+      await manager.save(SongSubmissionVote, vote);
+
+      // Increment vote count
+      submission.voteCount += 1;
+      return await manager.save(SongSubmission, submission);
     });
-
-    if (existingVote) {
-      throw new BadRequestException('You have already voted for this song');
-    }
-
-    // Create vote
-    const vote = this.voteRepository.create({
-      submissionId,
-      userId,
-    });
-    await this.voteRepository.save(vote);
-
-    // Increment vote count
-    submission.voteCount += 1;
-    return await this.songSubmissionRepository.save(submission);
   }
 
   async unvoteSubmission(submissionId: string, userId: string): Promise<SongSubmission> {
@@ -132,20 +139,23 @@ export class QueueService {
       throw new NotFoundException('Submission not found');
     }
 
-    const vote = await this.voteRepository.findOne({
-      where: { submissionId, userId },
+    // Use transaction to prevent race conditions
+    return await this.dataSource.transaction(async (manager) => {
+      const vote = await manager.findOne(SongSubmissionVote, {
+        where: { submissionId, userId },
+      });
+
+      if (!vote) {
+        throw new BadRequestException('You have not voted for this song');
+      }
+
+      // Remove vote
+      await manager.remove(SongSubmissionVote, vote);
+
+      // Decrement vote count
+      submission.voteCount = Math.max(0, submission.voteCount - 1);
+      return await manager.save(SongSubmission, submission);
     });
-
-    if (!vote) {
-      throw new BadRequestException('You have not voted for this song');
-    }
-
-    // Remove vote
-    await this.voteRepository.remove(vote);
-
-    // Decrement vote count
-    submission.voteCount = Math.max(0, submission.voteCount - 1);
-    return await this.songSubmissionRepository.save(submission);
   }
 
   async getTopSubmission(roomId: string): Promise<SongSubmission | null> {
@@ -167,7 +177,7 @@ export class QueueService {
 
   async removeSubmission(submissionId: string, userId: string): Promise<void> {
     const submission = await this.songSubmissionRepository.findOne({
-      where: { id: submissionId },
+      where: { id: submissionId, isActive: true },
     });
 
     if (!submission) {
