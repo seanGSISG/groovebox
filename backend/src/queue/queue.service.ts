@@ -6,6 +6,9 @@ import { SubmitSongDto, SongSubmissionDto, QueueStateDto } from './dto';
 
 @Injectable()
 export class QueueService {
+  private readonly MAX_QUEUE_SIZE = 50;
+  private readonly MAX_USER_SUBMISSIONS = 5;
+
   constructor(
     @InjectRepository(SongSubmission)
     private songSubmissionRepository: Repository<SongSubmission>,
@@ -30,6 +33,24 @@ export class QueueService {
 
     if (existing) {
       throw new BadRequestException('This song is already in the queue');
+    }
+
+    // Check queue size limit
+    const activeCount = await this.songSubmissionRepository.count({
+      where: { roomId, isActive: true },
+    });
+
+    if (activeCount >= this.MAX_QUEUE_SIZE) {
+      throw new BadRequestException('Queue is full (maximum 50 songs)');
+    }
+
+    // Check user submission rate limit
+    const userActiveCount = await this.songSubmissionRepository.count({
+      where: { roomId, submittedBy: userId, isActive: true },
+    });
+
+    if (userActiveCount >= this.MAX_USER_SUBMISSIONS) {
+      throw new BadRequestException('You can only have 5 active submissions at a time');
     }
 
     // Use transaction to ensure submission and vote are created atomically
