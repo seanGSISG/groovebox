@@ -1,3 +1,5 @@
+import { VoteSession, MutinySuccessEvent, MutinyFailedEvent } from './vote.types';
+
 export interface ServerToClientEvents {
   'sync:pong': (data: any) => void;
   'playback:start': (data: any) => void;
@@ -7,12 +9,12 @@ export interface ServerToClientEvents {
   'room:state': (data: any) => void;
   'chat:message': (data: any) => void;
   'room:members-changed': (data: any) => void;
-  'vote:election-started': (data: any) => void;
-  'vote:mutiny-started': (data: any) => void;
-  'vote:results-updated': (data: any) => void;
-  'vote:complete': (data: any) => void;
-  'mutiny:success': (data: any) => void;
-  'mutiny:failed': (data: any) => void;
+  'vote:election-started': (data: VoteSession) => void;
+  'vote:mutiny-started': (data: VoteSession) => void;
+  'vote:results-updated': (data: VoteSession) => void;
+  'vote:complete': (data: VoteSession) => void;
+  'mutiny:success': (data: MutinySuccessEvent) => void;
+  'mutiny:failed': (data: MutinyFailedEvent) => void;
   'dj:changed': (data: any) => void;
 }
 

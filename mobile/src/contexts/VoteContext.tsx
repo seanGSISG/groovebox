@@ -1,15 +1,15 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Socket } from 'socket.io-client';
-import { VoteSession, VoteType, RoomMember } from '../types/vote.types';
+import { VoteSession, VoteType, RoomMember, MutinySuccessEvent, MutinyFailedEvent } from '../types/vote.types';
 
 interface VoteContextType {
   currentVote: VoteSession | null;
   hasVoted: boolean;
-  startElection: (roomCode: string) => void;
-  voteForDj: (voteSessionId: string, targetUserId: string) => void;
-  startMutiny: (roomCode: string) => void;
-  voteOnMutiny: (voteSessionId: string, voteValue: boolean) => void;
-  randomizeDj: (roomCode: string) => void;
+  startElection: (roomCode: string) => boolean;
+  voteForDj: (voteSessionId: string, targetUserId: string) => boolean;
+  startMutiny: (roomCode: string) => boolean;
+  voteOnMutiny: (voteSessionId: string, voteValue: boolean) => boolean;
+  randomizeDj: (roomCode: string) => boolean;
 }
 
 const VoteContext = createContext<VoteContextType | undefined>(undefined);
@@ -51,13 +51,13 @@ export const VoteProvider: React.FC<VoteProviderProps> = ({ children, socket, us
       setHasVoted(false);
     });
 
-    socket.on('mutiny:success', (data: any) => {
+    socket.on('mutiny:success', (data: MutinySuccessEvent) => {
       console.log('[Vote] Mutiny succeeded:', data);
       setCurrentVote(null);
       setHasVoted(false);
     });
 
-    socket.on('mutiny:failed', (data: any) => {
+    socket.on('mutiny:failed', (data: MutinyFailedEvent) => {
       console.log('[Vote] Mutiny failed:', data);
       setCurrentVote(null);
       setHasVoted(false);
@@ -73,31 +73,78 @@ export const VoteProvider: React.FC<VoteProviderProps> = ({ children, socket, us
     };
   }, [socket]);
 
-  const startElection = (roomCode: string) => {
-    if (!socket) return;
+  const startElection = (roomCode: string): boolean => {
+    if (!socket) {
+      console.error('[Vote] Cannot start election: socket not connected');
+      return false;
+    }
     socket.emit('vote:start-election', roomCode);
+    return true;
   };
 
-  const voteForDj = (voteSessionId: string, targetUserId: string) => {
-    if (!socket) return;
+  const voteForDj = (voteSessionId: string, targetUserId: string): boolean => {
+    if (!socket) {
+      console.error('[Vote] Cannot vote for DJ: socket not connected');
+      return false;
+    }
+
+    if (!currentVote || currentVote.voteSessionId !== voteSessionId) {
+      console.error('[Vote] Cannot vote: no active vote session or session ID mismatch');
+      return false;
+    }
+
+    if (hasVoted) {
+      console.error('[Vote] Cannot vote: already voted in this session');
+      return false;
+    }
+
+    if (userId && targetUserId === userId) {
+      console.error('[Vote] Cannot vote for yourself');
+      return false;
+    }
+
     socket.emit('vote:cast-dj', { voteSessionId, targetUserId });
     setHasVoted(true);
+    return true;
   };
 
-  const startMutiny = (roomCode: string) => {
-    if (!socket) return;
+  const startMutiny = (roomCode: string): boolean => {
+    if (!socket) {
+      console.error('[Vote] Cannot start mutiny: socket not connected');
+      return false;
+    }
     socket.emit('vote:start-mutiny', roomCode);
+    return true;
   };
 
-  const voteOnMutiny = (voteSessionId: string, voteValue: boolean) => {
-    if (!socket) return;
+  const voteOnMutiny = (voteSessionId: string, voteValue: boolean): boolean => {
+    if (!socket) {
+      console.error('[Vote] Cannot vote on mutiny: socket not connected');
+      return false;
+    }
+
+    if (!currentVote || currentVote.voteSessionId !== voteSessionId) {
+      console.error('[Vote] Cannot vote: no active vote session or session ID mismatch');
+      return false;
+    }
+
+    if (hasVoted) {
+      console.error('[Vote] Cannot vote: already voted in this session');
+      return false;
+    }
+
     socket.emit('vote:cast-mutiny', { voteSessionId, voteValue });
     setHasVoted(true);
+    return true;
   };
 
-  const randomizeDj = (roomCode: string) => {
-    if (!socket) return;
+  const randomizeDj = (roomCode: string): boolean => {
+    if (!socket) {
+      console.error('[Vote] Cannot randomize DJ: socket not connected');
+      return false;
+    }
     socket.emit('dj:randomize', roomCode);
+    return true;
   };
 
   return (

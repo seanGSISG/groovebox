@@ -32,3 +32,19 @@ export interface RoomMember {
   displayName: string;
   isOnline: boolean;
 }
+
+export interface MutinySuccessEvent {
+  voteSessionId: string;
+  newDjId: string;
+  oldDjId: string;
+  yesVotes: number;
+  totalVoters: number;
+}
+
+export interface MutinyFailedEvent {
+  voteSessionId: string;
+  yesVotes: number;
+  noVotes: number;
+  totalVoters: number;
+  threshold: number;
+}
