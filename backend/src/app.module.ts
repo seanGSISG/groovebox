@@ -10,6 +10,7 @@ import { GatewayModule } from './gateway/gateway.module';
 import { SyncModule } from './sync/sync.module';
 import { VotesModule } from './votes/votes.module';
 import { YouTubeModule } from './youtube/youtube.module';
+import { QueueModule } from './queue/queue.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { YouTubeModule } from './youtube/youtube.module';
     SyncModule,
     VotesModule,
     YouTubeModule,
+    QueueModule,
   ],
   controllers: [AppController],
   providers: [AppService],

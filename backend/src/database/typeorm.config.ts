@@ -6,6 +6,7 @@ import { RoomMember } from '../entities/room-member.entity';
 import { Vote } from '../entities/vote.entity';
 import { RoomDjHistory } from '../entities/room-dj-history.entity';
 import { Message } from '../entities/message.entity';
+import { QueueEntry } from '../entities/queue-entry.entity';
 
 export const getTypeOrmConfig = (
   configService: ConfigService,
@@ -27,7 +28,7 @@ export const getTypeOrmConfig = (
     username: url.username,
     password: url.password,
     database: url.pathname.slice(1), // Remove leading '/'
-    entities: [User, Room, RoomMember, Vote, RoomDjHistory, Message],
+    entities: [User, Room, RoomMember, Vote, RoomDjHistory, Message, QueueEntry],
     synchronize: configService.get<string>('NODE_ENV') === 'development', // Only for development
     logging: configService.get<string>('NODE_ENV') === 'development',
     ssl: configService.get<string>('NODE_ENV') === 'production' ? { rejectUnauthorized: false } : false,
