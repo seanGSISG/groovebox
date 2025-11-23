@@ -13,6 +13,16 @@ GrooveBox is a mobile application (iOS + Android) that enables users to create s
 - 🔐 **Password-Protected Rooms**: Private or public listening sessions
 - 🎵 **Music Integration**: Spotify support (with more sources coming)
 
+## Queue System
+
+Groovebox now features a democratic voting-based queue system:
+
+- **Submit Songs**: Any participant can submit YouTube URLs
+- **Vote**: Upvote songs you want to hear next
+- **Auto-Play**: Highest-voted song plays automatically
+
+See [Queue System Documentation](docs/QUEUE_SYSTEM.md) for details.
+
 ## Architecture
 
 - **Mobile App**: React Native (iOS + Android)
