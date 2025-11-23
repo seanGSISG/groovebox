@@ -26,6 +26,7 @@ import {
 import { RoomStateDto } from './dto/room-state.dto';
 import { SyncBufferHelper } from './helpers/sync-buffer.helper';
 import { PlaybackSyncService } from './services/playback-sync.service';
+import { QueueService } from '../queue/queue.service';
 import xss from 'xss';
 
 interface AuthenticatedSocket extends Socket {
@@ -51,6 +52,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
     private readonly playbackSyncService: PlaybackSyncService,
+    private readonly queueService: QueueService,
     @InjectRepository(Room)
     private readonly roomRepository: Repository<Room>,
     @InjectRepository(RoomMember)
@@ -196,11 +198,15 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
       }
 
+      // Get queue state
+      const queueState = await this.queueService.getQueueState(room.id, userId);
+
       const roomState: RoomStateDto = {
         roomId: room.id,
         members: [], // TODO: fetch from room members
         currentDjId,
         playback: playbackState,
+        queueState,
       };
 
       client.emit('room:state', roomState);
@@ -475,6 +481,148 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch (error) {
       this.logger.error(`Error stopping playback: ${error.message}`);
       return { error: 'Failed to stop playback' };
+    }
+  }
+
+  @SubscribeMessage('queue:submit')
+  async handleQueueSubmit(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; youtubeUrl: string; songTitle?: string; artist?: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
+      const submission = await this.queueService.submitSong(
+        room.id,
+        client.data.userId,
+        {
+          youtubeUrl: payload.youtubeUrl,
+          songTitle: payload.songTitle,
+          artist: payload.artist,
+        },
+      );
+
+      // Broadcast new submission to all room members
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      this.server.to(`room:${room.id}`).emit('queue:updated', queueState);
+
+      return { success: true, submission };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @SubscribeMessage('queue:vote')
+  async handleQueueVote(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; submissionId: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
+      await this.queueService.voteForSubmission(payload.submissionId, client.data.userId);
+
+      // Broadcast updated queue to all room members
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      this.server.to(`room:${room.id}`).emit('queue:updated', queueState);
+
+      return { success: true };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @SubscribeMessage('queue:unvote')
+  async handleQueueUnvote(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; submissionId: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      // Verify user is in the room
+      const member = await this.roomMemberRepository.findOne({
+        where: { roomId: room.id, userId: client.data.userId },
+      });
+      if (!member) {
+        return { error: 'You are not a member of this room' };
+      }
+
+      await this.queueService.unvoteSubmission(payload.submissionId, client.data.userId);
+
+      // Broadcast updated queue to all room members
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      this.server.to(`room:${room.id}`).emit('queue:updated', queueState);
+
+      return { success: true };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @SubscribeMessage('queue:remove')
+  async handleQueueRemove(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string; submissionId: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      await this.queueService.removeSubmission(payload.submissionId, client.data.userId);
+
+      // Broadcast updated queue to all room members
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      this.server.to(`room:${room.id}`).emit('queue:updated', queueState);
+
+      return { success: true };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  @SubscribeMessage('queue:get')
+  async handleQueueGet(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() payload: { roomCode: string },
+  ) {
+    try {
+      const room = await this.roomRepository.findOne({ where: { roomCode: payload.roomCode } });
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+
+      const queueState = await this.queueService.getQueueState(room.id, client.data.userId);
+      return queueState;
+    } catch (error) {
+      return { error: error.message };
     }
   }
 }

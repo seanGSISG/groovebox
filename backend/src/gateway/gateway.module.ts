@@ -5,12 +5,14 @@ import { ConfigService } from '@nestjs/config';
 import { RoomGateway } from './room.gateway';
 import { Room, RoomMember, User, Message, RoomDjHistory } from '../entities';
 import { RedisModule } from '../redis/redis.module';
+import { QueueModule } from '../queue/queue.module';
 import { PlaybackSyncService } from './services/playback-sync.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Room, RoomMember, User, Message, RoomDjHistory]),
     RedisModule,
+    QueueModule,
     JwtModule.registerAsync({
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
