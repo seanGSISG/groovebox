@@ -1,4 +1,5 @@
 import { VoteSession, MutinySuccessEvent, MutinyFailedEvent } from './vote.types';
+import { QueueState, QueueEntry } from './queue.types';
 
 export interface ServerToClientEvents {
   'sync:pong': (data: any) => void;
@@ -16,6 +17,11 @@ export interface ServerToClientEvents {
   'mutiny:success': (data: MutinySuccessEvent) => void;
   'mutiny:failed': (data: MutinyFailedEvent) => void;
   'dj:changed': (data: any) => void;
+  'queue:state': (data: QueueState) => void;
+  'queue:updated': (data: QueueState) => void;
+  'queue:vote-updated': (data: { entryId: string; upvoteCount: number; downvoteCount: number; netScore: number; userVote: 'up' | 'down' | null }) => void;
+  'queue:entry-removed': (data: { entryId: string; reason?: string }) => void;
+  'exception': (data: { message: string; context?: any }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -32,4 +38,9 @@ export interface ClientToServerEvents {
   'vote:start-mutiny': (roomCode: string) => void;
   'vote:cast-mutiny': (data: { voteSessionId: string; voteValue: boolean }) => void;
   'dj:randomize': (roomCode: string) => void;
+  'queue:get': () => void;
+  'queue:add': (data: { youtubeUrl: string }) => void;
+  'queue:upvote': (data: { entryId: string }) => void;
+  'queue:downvote': (data: { entryId: string }) => void;
+  'queue:remove': (data: { entryId: string }) => void;
 }
