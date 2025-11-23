@@ -93,9 +93,70 @@ export class AddSongSubmissions1732320000000 implements MigrationInterface {
         onDelete: 'CASCADE',
       }),
     );
+
+    await queryRunner.createTable(
+      new Table({
+        name: 'song_submission_votes',
+        columns: [
+          {
+            name: 'id',
+            type: 'uuid',
+            isPrimary: true,
+            generationStrategy: 'uuid',
+            default: 'uuid_generate_v4()',
+          },
+          {
+            name: 'submission_id',
+            type: 'uuid',
+            isNullable: false,
+          },
+          {
+            name: 'user_id',
+            type: 'uuid',
+            isNullable: false,
+          },
+          {
+            name: 'created_at',
+            type: 'timestamptz',
+            default: 'CURRENT_TIMESTAMP',
+          },
+        ],
+      }),
+      true,
+    );
+
+    await queryRunner.createIndex(
+      'song_submission_votes',
+      new TableIndex({
+        name: 'IDX_song_submission_votes_unique',
+        columnNames: ['submission_id', 'user_id'],
+        isUnique: true,
+      }),
+    );
+
+    await queryRunner.createForeignKey(
+      'song_submission_votes',
+      new TableForeignKey({
+        columnNames: ['submission_id'],
+        referencedTableName: 'song_submissions',
+        referencedColumnNames: ['id'],
+        onDelete: 'CASCADE',
+      }),
+    );
+
+    await queryRunner.createForeignKey(
+      'song_submission_votes',
+      new TableForeignKey({
+        columnNames: ['user_id'],
+        referencedTableName: 'users',
+        referencedColumnNames: ['id'],
+        onDelete: 'CASCADE',
+      }),
+    );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.dropTable('song_submission_votes');
     await queryRunner.dropTable('song_submissions');
   }
 }
