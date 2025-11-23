@@ -720,4 +720,39 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new WsException(error.message);
     }
   }
+
+  /**
+   * Randomize DJ selection
+   */
+  @SubscribeMessage('dj:randomize')
+  async handleRandomizeDj(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() roomCode: string,
+  ): Promise<void> {
+    try {
+      const userId = client.data.userId;
+      const room = await this.roomsService.getRoomByCode(roomCode);
+
+      // Verify user is owner or current DJ
+      if (room.ownerId !== userId) {
+        const currentDj = await this.roomsService.getCurrentDj(room.id);
+        if (!currentDj || currentDj.userId !== userId) {
+          throw new WsException('Only room owner or current DJ can randomize DJ');
+        }
+      }
+
+      const djHistory = await this.roomsService.randomizeDj(room.id);
+
+      // Broadcast to room (the broadcast is already done in the service, but we emit again for confirmation)
+      this.server.to(`room:${roomCode}`).emit('dj:changed', {
+        newDjId: djHistory.userId,
+        reason: 'randomize',
+      });
+
+      this.logger.log(`DJ randomized in room ${roomCode}: ${djHistory.userId}`);
+    } catch (error) {
+      this.logger.error(`Randomize DJ error: ${error.message}`);
+      throw new WsException(error.message);
+    }
+  }
 }

@@ -86,11 +86,17 @@ describe('RoomsService', () => {
     save: jest.fn(),
   };
 
+  const mockRedisClient = {
+    get: jest.fn(),
+    set: jest.fn(),
+  };
+
   const mockRedisService = {
     getCurrentDj: jest.fn(),
     setCurrentDj: jest.fn(),
     setPlaybackState: jest.fn(),
     getPlaybackState: jest.fn(),
+    getClient: jest.fn(() => mockRedisClient),
   };
 
   beforeEach(async () => {
@@ -1214,6 +1220,124 @@ describe('RoomsService', () => {
       mockRedisService.getCurrentDj.mockResolvedValue(null);
 
       await expect(service.removeDj(roomId, 'mutiny')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+  });
+
+  describe('randomizeDj', () => {
+    it('should select a random member as DJ', async () => {
+      const roomId = 'room-1';
+      const members = [
+        { userId: 'user1', roomId },
+        { userId: 'user2', roomId },
+        { userId: 'user3', roomId },
+      ];
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.find.mockResolvedValue(members);
+      mockRedisService.getCurrentDj.mockResolvedValue(null);
+      mockRedisClient.get.mockResolvedValue(null);
+      mockRoomDjHistoryRepository.findOne.mockResolvedValue(null);
+      mockRoomDjHistoryRepository.create.mockReturnValue({
+        roomId,
+        userId: 'user1',
+        becameDjAt: new Date(),
+      });
+      mockRoomDjHistoryRepository.save.mockResolvedValue({});
+      mockRedisClient.set.mockResolvedValue('OK');
+
+      const result = await service.randomizeDj(roomId);
+
+      expect(result).toBeDefined();
+      expect(members.some((m) => m.userId === result.userId)).toBe(true);
+      expect(mockRoomDjHistoryRepository.save).toHaveBeenCalled();
+    });
+
+    it('should exclude users on DJ cooldown', async () => {
+      const roomId = 'room-1';
+      const members = [
+        { userId: 'user1', roomId },
+        { userId: 'user2', roomId },
+      ];
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.find.mockResolvedValue(members);
+      mockRedisService.getCurrentDj.mockResolvedValue(null);
+      mockRoomDjHistoryRepository.findOne.mockResolvedValue(null);
+      mockRedisClient.get.mockImplementation((key: string) => {
+        if (key.includes('user1')) return Promise.resolve('1'); // user1 on cooldown
+        return Promise.resolve(null);
+      });
+      mockRoomDjHistoryRepository.create.mockReturnValue({
+        roomId,
+        userId: 'user2',
+        becameDjAt: new Date(),
+      });
+      mockRoomDjHistoryRepository.save.mockResolvedValue({});
+      mockRedisClient.set.mockResolvedValue('OK');
+
+      const result = await service.randomizeDj(roomId);
+
+      expect(result.userId).toBe('user2'); // Should select user2, not user1
+    });
+
+    it('should throw NotFoundException if room does not exist', async () => {
+      const roomId = 'invalid-room';
+
+      mockRoomRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.randomizeDj(roomId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw BadRequestException if no members in room', async () => {
+      const roomId = 'room-1';
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.find.mockResolvedValue([]);
+
+      await expect(service.randomizeDj(roomId)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should throw BadRequestException if all members are on cooldown', async () => {
+      const roomId = 'room-1';
+      const members = [
+        { userId: 'user1', roomId },
+        { userId: 'user2', roomId },
+      ];
+
+      const mockRoom = {
+        id: roomId,
+        roomCode: 'ABC123',
+      };
+
+      mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+      mockRoomMemberRepository.find.mockResolvedValue(members);
+      mockRedisClient.get.mockImplementation((key: string) => {
+        // All members are on cooldown
+        return Promise.resolve('1');
+      });
+
+      await expect(service.randomizeDj(roomId)).rejects.toThrow(
         BadRequestException,
       );
     });

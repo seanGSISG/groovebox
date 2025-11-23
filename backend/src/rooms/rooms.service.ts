@@ -633,6 +633,85 @@ export class RoomsService {
   }
 
   /**
+   * Randomly select a DJ from active members (excluding those on cooldown)
+   */
+  async randomizeDj(roomId: string): Promise<RoomDjHistory> {
+    const room = await this.roomRepository.findOne({ where: { id: roomId } });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    // Get all active members
+    const members = await this.roomMemberRepository.find({
+      where: { roomId },
+    });
+
+    if (members.length === 0) {
+      throw new BadRequestException('No members in room');
+    }
+
+    // Filter out members on DJ cooldown
+    const redis = this.redisService.getClient();
+    const eligibleMembers = [];
+
+    for (const member of members) {
+      const cooldownKey = `room:${roomId}:dj_cooldown:${member.userId}`;
+      const onCooldown = await redis.get(cooldownKey);
+      if (!onCooldown) {
+        eligibleMembers.push(member);
+      }
+    }
+
+    if (eligibleMembers.length === 0) {
+      throw new BadRequestException('No eligible members (all on cooldown)');
+    }
+
+    // Select random member
+    const randomIndex = Math.floor(Math.random() * eligibleMembers.length);
+    const selectedMember = eligibleMembers[randomIndex];
+
+    // Remove current DJ if exists
+    const currentDjId = await this.redisService.getCurrentDj(room.id);
+    if (currentDjId) {
+      await this.removeDj(roomId, RemovalReason.VOTE);
+    }
+
+    // Set new DJ in Redis
+    await this.redisService.setCurrentDj(room.id, selectedMember.userId);
+
+    // Update new DJ's role
+    const djMember = await this.roomMemberRepository.findOne({
+      where: { roomId: room.id, userId: selectedMember.userId },
+    });
+    if (djMember) {
+      djMember.role = RoomMemberRole.DJ;
+      await this.roomMemberRepository.save(djMember);
+    }
+
+    // Create DJ history entry
+    const djHistory = this.roomDjHistoryRepository.create({
+      roomId,
+      userId: selectedMember.userId,
+      becameDjAt: new Date(),
+      removedAt: null,
+      removalReason: null,
+    });
+
+    await this.roomDjHistoryRepository.save(djHistory);
+
+    // Broadcast dj:changed event via WebSocket
+    if (this.roomGateway?.server) {
+      this.roomGateway.server.to(`room:${room.id}`).emit('dj:changed', {
+        roomId: room.id,
+        djId: selectedMember.userId,
+        reason: 'randomize',
+      });
+    }
+
+    return djHistory;
+  }
+
+  /**
    * Helper method to map Room entity to RoomDetailsDto
    */
   private mapRoomToDetailsDto(room: Room, includeMembers: boolean = false): RoomDetailsDto {

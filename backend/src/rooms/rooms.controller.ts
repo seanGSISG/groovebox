@@ -9,6 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   Query,
+  ForbiddenException,
 } from '@nestjs/common';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto, JoinRoomDto, RoomDetailsDto, RoomMemberDto, UserRoomDto } from './dto';
@@ -103,5 +104,32 @@ export class RoomsController {
     @Body() setDjDto: SetDjDto,
   ): Promise<{ success: boolean; djId: string }> {
     return this.roomsService.setDj(req.user.id, code.toUpperCase(), setDjDto);
+  }
+
+  /**
+   * POST /rooms/:code/randomize-dj - Randomly select a DJ (owner or current DJ only)
+   */
+  @Post(':code/randomize-dj')
+  @HttpCode(HttpStatus.OK)
+  async randomizeDj(
+    @Request() req,
+    @Param('code') code: string,
+  ): Promise<{ newDjId: string }> {
+    const userId = req.user.id;
+    const room = await this.roomsService.getRoomByCode(code.toUpperCase());
+
+    // Verify user is owner or current DJ
+    if (room.ownerId !== userId) {
+      const currentDj = await this.roomsService.getCurrentDj(room.id);
+      if (!currentDj || currentDj.userId !== userId) {
+        throw new ForbiddenException('Only room owner or current DJ can randomize DJ');
+      }
+    }
+
+    const djHistory = await this.roomsService.randomizeDj(room.id);
+
+    return {
+      newDjId: djHistory.userId,
+    };
   }
 }
