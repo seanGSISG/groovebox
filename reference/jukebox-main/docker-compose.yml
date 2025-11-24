@@ -1,0 +1,184 @@
+services:
+  server:
+    image: skeptrune/jukebox-server:v0.0.20
+    ports:
+      - "${SERVER_PORT}:${SERVER_INTERNAL_PORT}"
+    env_file:
+      - .env
+    environment:
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+      API_SERVER_PORT: ${SERVER_INTERNAL_PORT}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      PROXY_COUNTRY: ${PROXY_COUNTRY}
+      PROXY_HOST: ${PROXY_HOST}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      S3_BUCKET_REGION: ${S3_BUCKET_REGION}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      DB_FILE: ${DB_FILE}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_SECURE: ${SMTP_SECURE}
+    volumes:
+      - sqlite_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${SERVER_INTERNAL_PORT}/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 60s
+
+  worker1:
+    image: skeptrune/jukebox-worker:v0.0.20
+    ports:
+      - "${WORKER1_PORT}:${WORKER1_INTERNAL_PORT}"
+    env_file:
+      - .env
+    environment:
+      DB_FILE: ${DB_FILE}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      PROXY_COUNTRY: ${PROXY_COUNTRY}
+      PROXY_HOST: ${PROXY_HOST}
+      WORKER_SERVER_PORT: ${WORKER1_INTERNAL_PORT}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      S3_BUCKET_REGION: ${S3_BUCKET_REGION}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_SECURE: ${SMTP_SECURE}
+    volumes:
+      - sqlite_data:/data
+      - logsink_data:/logsinks
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker2:
+    image: skeptrune/jukebox-worker:v0.0.20
+    ports:
+      - "${WORKER2_PORT}:${WORKER2_INTERNAL_PORT}"
+    env_file:
+      - .env
+    environment:
+      DB_FILE: ${DB_FILE}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      PROXY_COUNTRY: ${PROXY_COUNTRY}
+      PROXY_HOST: ${PROXY_HOST}
+      WORKER_SERVER_PORT: ${WORKER2_INTERNAL_PORT}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      S3_BUCKET_REGION: ${S3_BUCKET_REGION}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_SECURE: ${SMTP_SECURE}
+    volumes:
+      - sqlite_data:/data
+      - logsink_data:/logsinks
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker3:
+    image: skeptrune/jukebox-worker:v0.0.20
+    ports:
+      - "${WORKER3_PORT}:${WORKER3_INTERNAL_PORT}"
+    env_file:
+      - .env
+    environment:
+      DB_FILE: ${DB_FILE}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      PROXY_COUNTRY: ${PROXY_COUNTRY}
+      PROXY_HOST: ${PROXY_HOST}
+      WORKER_SERVER_PORT: ${WORKER3_INTERNAL_PORT}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      S3_BUCKET_REGION: ${S3_BUCKET_REGION}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_SECURE: ${SMTP_SECURE}
+    volumes:
+      - sqlite_data:/data
+      - logsink_data:/logsinks
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    image: skeptrune/jukebox-spa:v0.0.20
+    env_file:
+      - .env
+    ports:
+      - "${FRONTEND_PORT}:${FRONTEND_INTERNAL_PORT}"
+    environment:
+      VITE_API_HOST: ${VITE_API_HOST}
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # MinIO Console
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
+    volumes:
+      - ./minio-init.sh:/minio-init.sh:ro
+    restart: "no"
+
+volumes:
+  sqlite_data:
+  logsink_data:
+  minio_data:

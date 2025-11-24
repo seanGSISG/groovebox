@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jukebox</title>
+
+    <!-- Meta description -->
+    <meta
+      name="description"
+      content="Turn your phone or any device into a jukebox! Share a link with friends so they can add songs to your shared music queue."
+    />
+
+    <!-- Open Graph meta tags -->
+    <meta property="og:title" content="Jukebox" />
+    <meta
+      property="og:description"
+      content="Turn your phone or any device into a jukebox! Share a link with friends so they can add songs to your shared music queue."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/opengraph-image.jpg" />
+    <meta
+      property="og:image:alt"
+      content="Jukebox - Collaborative Music Queue"
+    />
+    <meta property="og:site_name" content="Jukebox" />
+
+    <!-- Twitter Card meta tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Jukebox" />
+    <meta
+      name="twitter:description"
+      content="Turn your phone or any device into a jukebox! Share a link with friends so they can add songs to your shared music queue."
+    />
+    <meta name="twitter:image" content="/opengraph-image.jpg" />
+
+    <!-- Additional meta tags -->
+    <meta name="theme-color" content="#0099ff" />
+    <meta
+      name="keywords"
+      content="jukebox, music, collaborative playlist, shared queue, music streaming"
+    />
+
+    <script
+      defer
+      data-domain="jukebox.skeptrune.com"
+      src="https://plausible.trieve.ai/js/script.js"
+    ></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("/sw.js");
+        });
+      }
+    </script>
+    <script
+      src="https://analytics.ahrefs.com/analytics.js"
+      data-key="AiV1xt4URJVjH/kY2dCzbw"
+      async
+    ></script>
+    <script>
+      var ahrefs_analytics_script = document.createElement("script");
+      ahrefs_analytics_script.async = true;
+      ahrefs_analytics_script.src = "https://analytics.ahrefs.com/analytics.js";
+      ahrefs_analytics_script.setAttribute(
+        "data-key",
+        "AiV1xt4URJVjH/kY2dCzbw"
+      );
+      document
+        .getElementsByTagName("head")[0]
+        .appendChild(ahrefs_analytics_script);
+    </script>
+  </body>
+</html>
